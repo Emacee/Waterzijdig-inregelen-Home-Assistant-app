@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Waterzijdig Inregelen</title>
+  <link rel="stylesheet" href="static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <button id="btn-back" class="icon-btn" hidden title="Terug naar projecten">←</button>
+    <h1 id="title">Waterzijdig Inregelen</h1>
+    <div class="spacer"></div>
+    <div id="top-actions"></div>
+  </header>
+
+  <main id="view"></main>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <dialog id="dlg">
+    <form method="dialog" id="dlg-form">
+      <h2 id="dlg-title"></h2>
+      <div id="dlg-body"></div>
+      <div class="dlg-actions">
+        <button value="cancel" formnovalidate class="btn ghost">Annuleren</button>
+        <button value="ok" class="btn primary" id="dlg-ok">Opslaan</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+configuration:
+  log_level:
+    name: Log level
+    description: Verbosity of the add-on log.
+  max_upload_mb:
+    name: Max. upload size (MB)
+    description: Largest floorplan image that can be uploaded.

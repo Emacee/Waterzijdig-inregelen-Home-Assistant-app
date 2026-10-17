@@ -1,0 +1,7 @@
+configuration:
+  log_level:
+    name: Logniveau
+    description: Hoeveel de add-on logt.
+  max_upload_mb:
+    name: Max. uploadgrootte (MB)
+    description: Grootste plattegrondafbeelding die geüpload kan worden.
