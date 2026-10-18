@@ -1,8 +1,8 @@
 name: "Waterzijdig Inregelen"
-version: "0.1.0"
+version: "0.1.1"
 slug: "waterzijdig_inregelen"
-description: "Bijhouden van het waterzijdig inregelen van een cv-installatie: plattegronden, radiatoren/vloerverwarming plaatsen, temperaturen invoeren en per afgifte-element advies (verder open/dicht, nieuwe voorinstelling)."
-url: "https://github.com/Emacee/ha-app"
+description: "Waterzijdig inregelen van je cv-installatie: plattegronden, radiatoren en vloerverwarming plaatsen, aanvoer/retour meten en per element advies met de nieuwe voorinstelling."
+url: "https://github.com/Emacee/Waterzijdig-inregelen-Home-Assistant-app-"
 arch:
   - aarch64
   - amd64

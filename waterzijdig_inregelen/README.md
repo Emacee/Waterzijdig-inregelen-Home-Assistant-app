@@ -18,8 +18,8 @@ nodig heeft bij een zo laag mogelijke aanvoertemperatuur.
 
 - **Projecten** — per woning of installatie, met warmtebron (cv-ketel of warmtepomp) en
   een eigen doel-ΔT voor radiatoren en vloerverwarming.
-- **Plattegronden** — upload PNG, JPG, WebP of PDF (een PDF met meerdere pagina's wordt
-  één plattegrond per verdieping/pagina).
+- **Plattegronden** — upload PNG, JPG, GIF, WebP of PDF (een PDF met meerdere
+  pagina's wordt één plattegrond per verdieping/pagina).
 - **Slepen en neerzetten** — zet radiatoren, convectoren en vloerverwarmingsgroepen op de
   plattegrond en verplaats ze wanneer je wilt; werkt met muis en touchscreen.
 - **Metingen** — per element of als **meetronde** voor alle elementen tegelijk in één

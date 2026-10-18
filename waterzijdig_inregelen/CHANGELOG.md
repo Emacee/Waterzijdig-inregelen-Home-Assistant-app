@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+- Verhuisd naar een eigen repository:
+  https://github.com/Emacee/Waterzijdig-inregelen-Home-Assistant-app-
+  (voorheen onderdeel van Emacee/ha-app). Geen functionele wijzigingen.
+
 ## 0.1.0
 - Eerste versie: projecten, plattegronden (PNG/JPG/WebP, PDF via pdf.js in de browser),
   radiatoren/vloerverwarming/convectoren slepen op de plattegrond, metingen per element of

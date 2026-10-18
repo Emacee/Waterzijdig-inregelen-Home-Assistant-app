@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    name: Add-on lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: frenck/action-addon-linter@v2
+        with:
+          path: ./waterzijdig_inregelen
+
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -r waterzijdig_inregelen/requirements.txt pytest httpx
+      - run: pytest waterzijdig_inregelen/tests
+
+  build:
+    name: Build ${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        arch: [amd64, aarch64]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read base image
+        id: base
+        run: echo "image=$(yq '.build_from.${{ matrix.arch }}' waterzijdig_inregelen/build.yaml)" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+        if: matrix.arch != 'amd64'
+      - name: Build image (not pushed)
+        run: >
+          docker build
+          --platform linux/${{ matrix.arch == 'aarch64' && 'arm64' || 'amd64' }}
+          --build-arg BUILD_FROM=${{ steps.base.outputs.image }}
+          waterzijdig_inregelen
