@@ -58,6 +58,7 @@ h3 { font-size: 13px; margin: 16px 0 8px; text-transform: uppercase; letter-spac
   padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
   position: sticky; top: 0; z-index: 20;
 }
+.brand { width: 28px; height: 28px; flex-shrink: 0; }
 #top-actions { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 
 .btn, .icon-btn {

@@ -8,3 +8,4 @@
 - Rekenmethode gelijk ΔT of op warmtevraag (EN 442-karakteristiek), per groep
   (radiatoren / vloerverwarming) met pompadvies; totaal pompdebiet blijft gelijk bij het
   verdelen.
+- Icoon en logo voor de add-on store en de web-UI.
