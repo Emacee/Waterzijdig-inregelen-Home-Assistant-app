@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
-from .balance import analyze
+from .balance import analyze, settings_of, supply_temp
 from .store import NotFound, Store, find, new_id, now_iso
 
 _WEB = os.path.join(os.path.dirname(__file__), "web")
@@ -68,6 +68,8 @@ class Settings(_M):
     target_dt: Optional[float] = Field(None, ge=0.5, le=60)
     ufh_target_dt: Optional[float] = Field(None, ge=0.5, le=30)
     room_temp: Optional[float] = Field(None, ge=0, le=35)
+    supply_temp: Optional[float] = Field(None, ge=20, le=95)
+    ufh_supply_temp: Optional[float] = Field(None, ge=20, le=60)
     tolerance_pct: Optional[float] = Field(None, ge=0, le=100)
     keep_total_flow: Optional[bool] = None
     method: Optional[Literal["auto", "dt"]] = None
@@ -75,6 +77,10 @@ class Settings(_M):
     ufh_exponent: Optional[float] = Field(None, ge=0.8, le=2.0)
     radiator_nominal: Optional[List[float]] = Field(None, min_length=3, max_length=3)
     ufh_nominal: Optional[List[float]] = Field(None, min_length=3, max_length=3)
+
+
+# Deze instellingen mogen expliciet leeg (null) gemaakt worden.
+_NULLABLE_SETTINGS = ("supply_temp", "ufh_supply_temp")
 
 
 class ValveType(_M):
@@ -107,7 +113,7 @@ class EmitterIn(_M):
 
 
 class MeasurementIn(_M):
-    t_in: float = Field(..., ge=-10, le=110)
+    t_in: Optional[float] = Field(None, ge=-10, le=110)  # leeg = cv-aanvoertemperatuur
     t_out: float = Field(..., ge=-10, le=110)
     t_room: Optional[float] = Field(None, ge=-10, le=40)
     ts: Optional[str] = None
@@ -162,6 +168,9 @@ async def update_project(pid: str, body: ProjectUpdate):
             p[k] = v
     if body.settings:
         p["settings"].update(body.settings.model_dump(exclude_none=True))
+        for k in _NULLABLE_SETTINGS:
+            if k in body.settings.model_fields_set and getattr(body.settings, k) is None:
+                p["settings"][k] = None
     if body.valve_types is not None:
         p["valve_types"] = [v.model_dump() for v in body.valve_types]
     return _out(store.save(p))
@@ -314,7 +323,10 @@ async def delete_emitter(pid: str, eid: str):
 
 # ---- metingen ---------------------------------------------------------------
 
-def _add_measurement(em: Dict[str, Any], m: MeasurementIn) -> None:
+def _add_measurement(p: Dict[str, Any], em: Dict[str, Any], m: MeasurementIn) -> None:
+    if m.t_in is None and supply_temp(settings_of(p), em.get("type") == "vloerverwarming") is None:
+        raise HTTPException(422, f"{em.get('name') or 'Element'}: vul de aanvoertemperatuur in "
+                                 "of stel de cv-aanvoertemperatuur in bij de projectinstellingen")
     em.setdefault("measurements", []).append({
         "id": new_id(), "ts": m.ts or now_iso(), "t_in": m.t_in, "t_out": m.t_out,
         "t_room": m.t_room, "preset": em.get("preset"),
@@ -324,7 +336,7 @@ def _add_measurement(em: Dict[str, Any], m: MeasurementIn) -> None:
 @app.post("/api/projects/{pid}/emitters/{eid}/measurements")
 async def add_measurement(pid: str, eid: str, body: MeasurementIn):
     p = store.get(pid)
-    _add_measurement(find(p["emitters"], eid), body)
+    _add_measurement(p, find(p["emitters"], eid), body)
     return _out(store.save(p))
 
 
@@ -334,7 +346,7 @@ async def add_measurements(pid: str, body: Batch):
     ts = now_iso()
     for it in body.items:
         it.ts = it.ts or ts
-        _add_measurement(find(p["emitters"], it.emitter_id), it)
+        _add_measurement(p, find(p["emitters"], it.emitter_id), it)
     return _out(store.save(p))
 
 

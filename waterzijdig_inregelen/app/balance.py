@@ -16,6 +16,10 @@ debiet; de verhouding ``r = doel / huidig`` is het advies (r > 1: verder open).
 * **ΔT-methode** (standaard): elk element moet bij zijn eigen aanvoertemperatuur
   het doel-ΔT van het project halen. Het nominale vermogen valt dan weg uit
   ``r`` en dient alleen als weging; zonder vermogen werkt de methode dus ook.
+* **Cv-aanvoertemperatuur**: per project kan één aanvoertemperatuur worden
+  ingesteld (en eventueel een eigen voor de vloerverwarming). Metingen zonder
+  aanvoertemperatuur rekenen daarmee, zodat alleen de retour per element gemeten
+  hoeft te worden; ΔT = cv-aanvoer − retour.
 * **Warmtevraag-methode**: als bij álle gemeten elementen het vermogen én de
   warmtevraag van de ruimte zijn ingevuld, wordt het huidige totaal geleverde
   vermogen verdeeld naar rato van de warmtevraag.
@@ -45,6 +49,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "target_dt": 20.0,               # radiatoren / convectoren
     "ufh_target_dt": 5.0,            # vloerverwarming (eigen groep)
     "room_temp": 20.0,
+    "supply_temp": None,             # cv-aanvoertemperatuur; None = per meting invullen
+    "ufh_supply_temp": None,         # eigen aanvoer vloerverwarming; None = supply_temp
     "tolerance_pct": 10.0,
     "keep_total_flow": True,
     "method": "auto",                # auto | dt
@@ -216,6 +222,12 @@ def _num(v: Any) -> Optional[float]:
     return f if math.isfinite(f) else None
 
 
+def supply_temp(cfg: Dict[str, Any], is_ufh: bool) -> Optional[float]:
+    """Ingestelde aanvoertemperatuur voor deze groep (None als niet ingesteld)."""
+    t = _num(cfg.get("ufh_supply_temp")) if is_ufh else None
+    return t if t is not None else _num(cfg.get("supply_temp"))
+
+
 def latest_measurement(emitter: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     ms = emitter.get("measurements") or []
     if not ms:
@@ -245,13 +257,18 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
             row["advice"] = "Nog geen meting"
             continue
         t_in, t_out = _num(m.get("t_in")), _num(m.get("t_out"))
+        if t_in is None:
+            t_in = supply_temp(cfg, is_ufh)
+            if t_in is not None:
+                row["t_in_source"] = "cv"
         t_room = _num(m.get("t_room"))
         if t_room is None:
             t_room = float(cfg["room_temp"])
         row.update(t_in=t_in, t_out=t_out, t_room=t_room, measured_at=m.get("ts"),
                    preset_measured=_num(m.get("preset")))
         if t_in is None or t_out is None:
-            row.update(status="ongeldig", advice="Aanvoer- en retourtemperatuur nodig")
+            row.update(status="ongeldig", advice="Aanvoer- en retourtemperatuur nodig "
+                                                 "(of stel de cv-aanvoertemperatuur in)")
             continue
         dt = t_in - t_out
         row["dt"] = round(dt, 2)

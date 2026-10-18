@@ -5,6 +5,10 @@
 1. **Nieuw project** → kies de warmtebron. Die bepaalt het standaard doel-ΔT voor de
    radiatoren: cv-ketel 20 K, warmtepomp 5 K. Vloerverwarming heeft een eigen doel-ΔT
    (standaard 5 K). Alles is aan te passen onder ⚙.
+   Stel daar eventueel ook de **cv-aanvoertemperatuur** in (en, bij een gemengde groep,
+   een eigen aanvoertemperatuur voor de vloerverwarming): metingen waarbij je de aanvoer
+   leeg laat rekenen dan met die temperatuur, `ΔT = cv-aanvoer − retour`. Je hoeft per
+   element dan alleen de retour te meten. Een wél ingevulde aanvoer gaat altijd voor.
 2. **+ Plattegrond** → upload een of meer plattegronden (of sleep het bestand op de
    pagina). Dubbelklik op een tabblad om het te hernoemen of te verwijderen.
 3. **Sleep** *Radiator*, *Vloerverwarming* of *Convector* uit de werkbalk op de

@@ -66,3 +66,21 @@ def test_rejects_non_images(client):
 def test_bad_ids(client):
     assert client.get("/api/projects/..%2f..%2fetc").status_code == 404
     assert client.get("/api/projects/ZZZ").status_code == 404
+
+
+def test_cv_supply_temp(client):
+    pid = client.post("/api/projects", json={"name": "Huis"}).json()["project"]["id"]
+    eid = client.post(f"/api/projects/{pid}/emitters", json={}).json()["created_id"]
+    r = client.post(f"/api/projects/{pid}/emitters/{eid}/measurements", json={"t_out": 50})
+    assert r.status_code == 422  # geen aanvoer en geen cv-aanvoertemperatuur
+
+    r = client.put(f"/api/projects/{pid}", json={"settings": {"supply_temp": 70}})
+    assert r.json()["project"]["settings"]["supply_temp"] == 70
+    r = client.post(f"/api/projects/{pid}/measurements",
+                    json={"items": [{"emitter_id": eid, "t_out": 55}]})
+    a = r.json()["analysis"]["emitters"][0]
+    assert a["t_in"] == 70 and a["dt"] == 15
+
+    r = client.put(f"/api/projects/{pid}", json={"settings": {"supply_temp": None}})
+    assert r.json()["project"]["settings"]["supply_temp"] is None
+    assert r.json()["analysis"]["emitters"][0]["status"] == "ongeldig"

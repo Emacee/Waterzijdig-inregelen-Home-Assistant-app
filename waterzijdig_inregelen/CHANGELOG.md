@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0
+- Nieuwe projectinstelling **cv-aanvoertemperatuur** (plus optioneel een eigen
+  aanvoertemperatuur voor vloerverwarming). Metingen zonder aanvoer rekenen het ΔT vanaf
+  deze temperatuur, zodat per element alleen de retour gemeten hoeft te worden.
+
 ## 0.1.1
 - Verhuisd naar een eigen repository:
   https://github.com/Emacee/Waterzijdig-inregelen-Home-Assistant-app-

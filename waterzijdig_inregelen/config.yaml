@@ -1,5 +1,5 @@
 name: "Waterzijdig Inregelen"
-version: "0.1.1"
+version: "0.2.0"
 slug: "waterzijdig_inregelen"
 description: "Waterzijdig inregelen van je cv-installatie: plattegronden, radiatoren en vloerverwarming plaatsen, aanvoer/retour meten en per element advies met de nieuwe voorinstelling."
 url: "https://github.com/Emacee/Waterzijdig-inregelen-Home-Assistant-app-"

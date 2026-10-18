@@ -40,6 +40,13 @@ const TYPES = {
   convector: { label: "Convector", icon: "C" },
 };
 
+// Ingestelde cv-aanvoertemperatuur voor dit element (null = per meting invullen).
+const cvSupply = (em) => {
+  const set = S.project.settings;
+  const ufh = em.type === "vloerverwarming" ? set.ufh_supply_temp : null;
+  return ufh ?? set.supply_temp ?? null;
+};
+
 // ---- API ------------------------------------------------------------------
 
 async function api(method, path, body) {
@@ -428,6 +435,7 @@ function emitterPanelHtml(em) {
   const valve = valveOf(em);
   const isUfh = em.type === "vloerverwarming";
   const nom = isUfh ? set.ufh_nominal : set.radiator_nominal;
+  const cv = cvSupply(em);
   const ms = [...(em.measurements || [])].sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
   const canApply = r.preset_advice !== undefined && r.preset_advice !== null &&
     (st === "open" || st === "dicht") && r.preset_advice !== em.preset;
@@ -443,7 +451,7 @@ function emitterPanelHtml(em) {
         ? `<div class="preset">${esc(r.preset_basis_label)} → ${esc(r.preset_advice_label)}</div>` : ""}
       <div>${esc(r.advice || "")}</div>
       ${r.dt !== undefined ? `<dl class="kv" style="margin-top:8px">
-        <dt>Gemeten</dt><dd>${fmt(r.t_in, 1)} → ${fmt(r.t_out, 1)} °C (ΔT ${fmt(r.dt, 1)} K), ruimte ${fmt(r.t_room, 1)} °C</dd>
+        <dt>Gemeten</dt><dd>${fmt(r.t_in, 1)}${r.t_in_source === "cv" ? " (cv)" : ""} → ${fmt(r.t_out, 1)} °C (ΔT ${fmt(r.dt, 1)} K), ruimte ${fmt(r.t_room, 1)} °C</dd>
         ${r.ratio !== undefined ? `<dt>Debietfactor</dt><dd>× ${fmt(r.ratio, 2)}</dd>` : ""}
         ${r.flow_act ? `<dt>Debiet</dt><dd>${fmt(r.flow_act, 0)} → ${fmt(r.flow_target, 0)} l/h</dd>` : ""}
         ${r.q_act ? `<dt>Afgifte</dt><dd>${fmt(r.q_act, 0)} W${r.q_target ? ` → doel ${fmt(r.q_target, 0)} W` : ""}</dd>` : ""}
@@ -456,7 +464,7 @@ function emitterPanelHtml(em) {
 
     <h3>Nieuwe meting</h3>
     <form id="meas" class="grid3" autocomplete="off">
-      <label>Aanvoer °C<input name="t_in" inputmode="decimal" required></label>
+      <label>Aanvoer °C<input name="t_in" inputmode="decimal" ${cv === null ? "required" : `placeholder="cv ${fmt(cv, 1)}" title="Leeg = cv-aanvoertemperatuur uit de projectinstellingen"`}></label>
       <label>Retour °C<input name="t_out" inputmode="decimal" required></label>
       <label>Ruimte °C<input name="t_room" inputmode="decimal" placeholder="${fmt(set.room_temp, 1)}"></label>
       <div style="grid-column:1/-1"><button class="btn primary" style="width:100%">Opslaan &amp; herberekenen</button></div>
@@ -487,10 +495,11 @@ function emitterPanelHtml(em) {
 
     <h3>Meethistorie</h3>
     ${ms.length ? `<table class="history"><thead><tr><th>Wanneer</th><th>Aanv.</th><th>Ret.</th><th>ΔT</th><th>Ruimte</th><th>Stand</th><th></th></tr></thead>
-      <tbody>${ms.map((m) => `<tr><td>${fmtDate(m.ts)}</td><td>${fmt(m.t_in, 1)}</td><td>${fmt(m.t_out, 1)}</td>
-        <td>${fmt(m.t_in - m.t_out, 1)}</td><td>${m.t_room === null || m.t_room === undefined ? "–" : fmt(m.t_room, 1)}</td>
+      <tbody>${ms.map((m) => { const tin = m.t_in ?? cv; return `<tr><td>${fmtDate(m.ts)}</td>
+        <td>${m.t_in === null || m.t_in === undefined ? `<span class="muted" title="cv-aanvoertemperatuur">${fmt(cv, 1)}</span>` : fmt(m.t_in, 1)}</td><td>${fmt(m.t_out, 1)}</td>
+        <td>${tin === null ? "–" : fmt(tin - m.t_out, 1)}</td><td>${m.t_room === null || m.t_room === undefined ? "–" : fmt(m.t_room, 1)}</td>
         <td>${esc(presetLabel(valve, m.preset))}</td>
-        <td><button class="x" data-del-m="${m.id}" title="Meting verwijderen">✕</button></td></tr>`).join("")}</tbody></table>`
+        <td><button class="x" data-del-m="${m.id}" title="Meting verwijderen">✕</button></td></tr>`; }).join("")}</tbody></table>`
       : `<p class="muted">Nog geen metingen.</p>`}
 
     <p style="margin-top:24px"><button class="btn danger" id="btn-del">Element verwijderen</button></p>`;
@@ -519,7 +528,9 @@ function bindEmitterPanel(side, em) {
     ev.preventDefault();
     const f = ev.target;
     const t_in = numOrNull(f.t_in.value), t_out = numOrNull(f.t_out.value);
-    if (t_in === null || t_out === null) return toast("Vul aanvoer en retour in", true);
+    if (t_out === null || (t_in === null && cvSupply(em) === null)) {
+      return toast(cvSupply(em) === null ? "Vul aanvoer en retour in" : "Vul de retour in", true);
+    }
     await mutate("POST", `emitters/${em.id}/measurements`,
       { t_in, t_out, t_room: numOrNull(f.t_room.value) });
     toast("Opgeslagen en herberekend");
@@ -557,7 +568,7 @@ function renderTable() {
       rows.push(`<tr data-id="${e.id}">
         <td><b>${esc(e.name)}</b><div class="muted small">${esc(e.room || "")}</div></td>
         <td><input name="preset" inputmode="decimal" value="${e.preset ?? ""}" title="${valve ? esc(valve.name) : "Geen ventieltype"}"></td>
-        <td><input name="t_in" inputmode="decimal" placeholder="${r.t_in ?? ""}"></td>
+        <td><input name="t_in" inputmode="decimal" placeholder="${cvSupply(e) !== null ? "cv " + fmt(cvSupply(e), 1) : r.t_in ?? ""}"></td>
         <td><input name="t_out" inputmode="decimal" placeholder="${r.t_out ?? ""}"></td>
         <td><input name="t_room" inputmode="decimal" placeholder="${r.t_room ?? fmt(p.settings.room_temp, 1)}"></td>
         <td class="num">${r.dt !== undefined ? fmt(r.dt, 1) : "–"}</td>
@@ -576,7 +587,8 @@ function renderTable() {
         <button class="btn primary" id="btn-save-round">Meetronde opslaan &amp; herberekenen</button>
         <button class="btn" id="btn-apply-all" ${anyAdvice ? "" : "disabled"}>Alle geadviseerde standen ingesteld</button>
         <span class="muted small">Vul aanvoer/retour in (Enter = volgend veld). Lege regels worden overgeslagen;
-          grijze waarden zijn de laatste meting.</span>
+          grijze waarden zijn de laatste meting. Met een ingestelde cv-aanvoertemperatuur (⚙)
+          mag de aanvoer leeg blijven.</span>
       </div>
       <div class="side" style="width:auto;max-width:none;border:none;padding:0 0 12px;background:none">${summaryHtml()}</div>
       ${rows.length ? `<table class="round"><thead><tr>
@@ -601,8 +613,10 @@ function renderTable() {
     for (const tr of $$(".round tr[data-id]", view)) {
       const t_in = numOrNull($("[name=t_in]", tr).value), t_out = numOrNull($("[name=t_out]", tr).value);
       if (t_in === null && t_out === null) continue;
-      if (t_in === null || t_out === null) {
-        toast(`Vul bij ${emitter(tr.dataset.id).name} zowel aanvoer als retour in`, true);
+      const em = emitter(tr.dataset.id);
+      if (t_out === null || (t_in === null && cvSupply(em) === null)) {
+        toast(cvSupply(em) === null ? `Vul bij ${em.name} zowel aanvoer als retour in`
+          : `Vul bij ${em.name} de retour in`, true);
         return;
       }
       items.push({ emitter_id: tr.dataset.id, t_in, t_out, t_room: numOrNull($("[name=t_room]", tr).value) });
@@ -786,6 +800,10 @@ async function editSettings() {
       <label>Doel-ΔT radiatoren (K)<input name="target_dt" inputmode="decimal" value="${s.target_dt}"></label>
       <label>Doel-ΔT vloerverwarming (K)<input name="ufh_target_dt" inputmode="decimal" value="${s.ufh_target_dt}"></label>
       <label>Ruimtetemperatuur standaard (°C)<input name="room_temp" inputmode="decimal" value="${s.room_temp}"></label>
+      <label title="Aanvoertemperatuur van de cv; metingen zonder aanvoer rekenen hiermee (ΔT = cv-aanvoer − retour)">Cv-aanvoertemperatuur (°C)
+        <input name="supply_temp" inputmode="decimal" value="${s.supply_temp ?? ""}" placeholder="leeg = per meting"></label>
+      <label title="Alleen nodig als de vloerverwarming een eigen (gemengde) aanvoer heeft">Aanvoer vloerverwarming (°C)
+        <input name="ufh_supply_temp" inputmode="decimal" value="${s.ufh_supply_temp ?? ""}" placeholder="leeg = cv-aanvoer"></label>
       <label>Tolerantie "goed" (± % debiet)<input name="tolerance_pct" inputmode="decimal" value="${s.tolerance_pct}"></label>
     </div>
     <label>Methode<select name="method">
@@ -847,7 +865,9 @@ async function editSettings() {
       settings: {
         heat_source: val("heat_source"), target_dt: numOrNull(val("target_dt")),
         ufh_target_dt: numOrNull(val("ufh_target_dt")),
-        room_temp: numOrNull(val("room_temp")), tolerance_pct: numOrNull(val("tolerance_pct")),
+        room_temp: numOrNull(val("room_temp")),
+        supply_temp: numOrNull(val("supply_temp")), ufh_supply_temp: numOrNull(val("ufh_supply_temp")),
+        tolerance_pct: numOrNull(val("tolerance_pct")),
         method: val("method"), keep_total_flow: $("[name=keep_total_flow]", body).checked,
         radiator_exponent: numOrNull(val("radiator_exponent")), ufh_exponent: numOrNull(val("ufh_exponent")),
         radiator_nominal: regime(val("radiator_nominal")), ufh_nominal: regime(val("ufh_nominal")),
