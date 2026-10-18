@@ -84,3 +84,35 @@ def test_cv_supply_temp(client):
     r = client.put(f"/api/projects/{pid}", json={"settings": {"supply_temp": None}})
     assert r.json()["project"]["settings"]["supply_temp"] is None
     assert r.json()["analysis"]["emitters"][0]["status"] == "ongeldig"
+
+
+def test_pipes_and_components(client):
+    pid = client.post("/api/projects", json={"name": "Huis"}).json()["project"]["id"]
+    r = client.post(f"/api/projects/{pid}/floorplans", files={"file": ("bg.png", PNG, "image/png")},
+                    data={"name": "BG", "width": "1", "height": "1"})
+    fid = r.json()["project"]["floorplans"][0]["id"]
+    r = client.post(f"/api/projects/{pid}/floorplans/{fid}/pipes",
+                    json={"points": [[0.1, 0.5], [0.9, 0.5]]})
+    lid = r.json()["created_id"]
+    assert r.json()["project"]["floorplans"][0]["pipes"][0]["id"] == lid
+    client.post(f"/api/projects/{pid}/emitters", json={"floorplan_id": fid, "x": 0.5, "y": 0.52})
+    r = client.post(f"/api/projects/{pid}/emitters",
+                    json={"floorplan_id": fid, "x": 0.2, "y": 0.52})
+    floor = r.json()["schema"]["floors"][0]
+    assert floor["id"] == fid and len(floor["children"]) == 2
+
+    r = client.post(f"/api/projects/{pid}/components", json={"type": "pomp", "attach": f"fp:{fid}"})
+    cid = r.json()["created_id"]
+    comp = r.json()["project"]["components"][0]
+    assert comp["name"] == "Secundaire pomp 1" and comp["attach"] == f"fp:{fid}"
+    assert client.post(f"/api/projects/{pid}/components",
+                       json={"type": "pomp", "attach": "fp:abc123"}).status_code == 404
+    assert client.post(f"/api/projects/{pid}/components",
+                       json={"type": "pomp", "attach": "../x"}).status_code == 422
+    r = client.post(f"/api/projects/{pid}/components", json={"type": "boilervat"})
+    assert r.json()["project"]["components"][1]["attach"] == "source"
+
+    client.delete(f"/api/projects/{pid}/floorplans/{fid}/pipes/{lid}")
+    r = client.delete(f"/api/projects/{pid}/floorplans/{fid}")
+    assert r.json()["project"]["components"][0]["attach"] == "main"
+    assert client.delete(f"/api/projects/{pid}/components/{cid}").json()["project"]["components"][0]["type"] == "boilervat"

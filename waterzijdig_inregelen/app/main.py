@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from . import __version__
 from .balance import analyze, settings_of, supply_temp
+from .schema import COMPONENT_LABELS, COMPONENT_TYPES, build_schema
 from .store import NotFound, Store, find, new_id, now_iso
 
 _WEB = os.path.join(os.path.dirname(__file__), "web")
@@ -48,7 +49,7 @@ async def _not_found(_: Request, exc: NotFound):
 
 
 def _out(p: Dict[str, Any]) -> Dict[str, Any]:
-    return {"project": p, "analysis": analyze(p)}
+    return {"project": p, "analysis": analyze(p), "schema": build_schema(p)}
 
 
 # ---- payloads ----------------------------------------------------------------
@@ -109,6 +110,22 @@ class EmitterIn(_M):
     demand_w: Optional[float] = Field(None, ge=0, le=100000)
     valve_type: Optional[str] = Field(None, max_length=40)
     preset: Optional[float] = Field(None, ge=0, le=1000)
+    notes: Optional[str] = Field(None, max_length=5000)
+
+
+class PipeIn(_M):
+    points: Optional[List[List[float]]] = Field(None, min_length=2, max_length=500)
+    name: Optional[str] = Field(None, max_length=100)
+
+
+ComponentType = Literal["pomp", "boilervat", "buffervat", "thermostaat", "mengklep"]
+_ATTACH = r"^(source|main|(fp|ufh):[0-9a-f]{1,32})$"
+
+
+class ComponentIn(_M):
+    type: Optional[ComponentType] = None
+    name: Optional[str] = Field(None, max_length=100)
+    attach: Optional[str] = Field(None, pattern=_ATTACH)
     notes: Optional[str] = Field(None, max_length=5000)
 
 
@@ -271,6 +288,92 @@ async def rename_floorplan(pid: str, fid: str, body: Dict[str, Any]):
 @app.delete("/api/projects/{pid}/floorplans/{fid}")
 async def delete_floorplan(pid: str, fid: str):
     return _out(store.delete_floorplan(pid, fid))
+
+
+# ---- leidingverloop ----------------------------------------------------------
+
+def _points(pts: List[List[float]]) -> List[List[float]]:
+    out = []
+    for pt in pts:
+        if len(pt) != 2:
+            raise HTTPException(422, "Een punt is [x, y]")
+        out.append([round(min(1.0, max(0.0, float(v))), 5) for v in pt])
+    return out
+
+
+@app.post("/api/projects/{pid}/floorplans/{fid}/pipes")
+async def create_pipe(pid: str, fid: str, body: PipeIn):
+    p = store.get(pid)
+    fp = find(p["floorplans"], fid)
+    if not body.points:
+        raise HTTPException(422, "Een leiding heeft minstens twee punten")
+    pipe = {"id": new_id(), "name": body.name or "", "points": _points(body.points)}
+    fp["pipes"].append(pipe)
+    out = _out(store.save(p))
+    out["created_id"] = pipe["id"]
+    return out
+
+
+@app.put("/api/projects/{pid}/floorplans/{fid}/pipes/{lid}")
+async def update_pipe(pid: str, fid: str, lid: str, body: PipeIn):
+    p = store.get(pid)
+    pipe = find(find(p["floorplans"], fid)["pipes"], lid)
+    if body.points is not None:
+        pipe["points"] = _points(body.points)
+    if body.name is not None:
+        pipe["name"] = body.name
+    return _out(store.save(p))
+
+
+@app.delete("/api/projects/{pid}/floorplans/{fid}/pipes/{lid}")
+async def delete_pipe(pid: str, fid: str, lid: str):
+    p = store.get(pid)
+    fp = find(p["floorplans"], fid)
+    find(fp["pipes"], lid)
+    fp["pipes"] = [x for x in fp["pipes"] if x["id"] != lid]
+    return _out(store.save(p))
+
+
+# ---- componenten (schema) ------------------------------------------------------
+
+def _check_attach(p: Dict[str, Any], attach: Optional[str]) -> None:
+    if attach and ":" in attach:
+        find(p["floorplans"], attach.split(":", 1)[1])
+
+
+@app.post("/api/projects/{pid}/components")
+async def create_component(pid: str, body: ComponentIn):
+    p = store.get(pid)
+    if not body.type:
+        raise HTTPException(422, "Kies een type component")
+    _check_attach(p, body.attach)
+    default = "source" if body.type in ("boilervat", "buffervat", "thermostaat") else "main"
+    count = sum(1 for c in p["components"] if c.get("type") == body.type) + 1
+    comp = {"id": new_id(), "type": body.type,
+            "name": body.name or f"{COMPONENT_LABELS[body.type]} {count}",
+            "attach": body.attach or default, "notes": body.notes or ""}
+    p["components"].append(comp)
+    out = _out(store.save(p))
+    out["created_id"] = comp["id"]
+    return out
+
+
+@app.put("/api/projects/{pid}/components/{cid}")
+async def update_component(pid: str, cid: str, body: ComponentIn):
+    p = store.get(pid)
+    comp = find(p["components"], cid)
+    data = body.model_dump(exclude_none=True)
+    _check_attach(p, data.get("attach"))
+    comp.update(data)
+    return _out(store.save(p))
+
+
+@app.delete("/api/projects/{pid}/components/{cid}")
+async def delete_component(pid: str, cid: str):
+    p = store.get(pid)
+    find(p["components"], cid)
+    p["components"] = [c for c in p["components"] if c["id"] != cid]
+    return _out(store.save(p))
 
 
 # ---- afgifte-elementen ------------------------------------------------------

@@ -31,6 +31,10 @@ nodig heeft bij een zo laag mogelijke aanvoertemperatuur.
 - **Pompadvies** — wanneer het totale debiet te hoog of te laag is voor het doel-ΔT.
 - **Optioneel vermogen en warmtevraag** — vul je bij alle radiatoren vermogen en
   warmtevraag in, dan wordt naar warmtevraag ingeregeld in plaats van op gelijke ΔT.
+- **Hydraulisch schema** — teken het leidingverloop op de plattegronden; het tabblad
+  **Schema** tekent daaruit automatisch een tweepijpsschema met verdiepingen, aftakkingen,
+  vloerverwarmingsverdeler en de adviezen per element. Voeg secundaire pompen, boiler- en
+  buffervat, thermostaten en mengkleppen toe; te downloaden als SVG.
 - **CSV-export** voor Excel, en alles staat in de add-on-data, dus in elke
   Home Assistant-back-up.
 

@@ -25,6 +25,33 @@
    laatste meting is veranderd krijgen een gestippelde rand en *meten*: doe na een tijdje
    een nieuwe meetronde. Herhaal tot (bijna) alles groen is.
 
+## Leidingverloop en hydraulisch schema
+
+* **Leiding tekenen**: kies op de plattegrond **✎ Leiding** en klik de punten van het
+  leidingverloop aan (Shift = haaks). Dubbelklik of Enter maakt de leiding af, Backspace
+  haalt het laatste punt weg, Esc stopt. Een leiding staat voor het aanvoer/retour-paar
+  en loopt vanaf het beginpunt (de stip).
+* De eerste leiding op een plattegrond begint bij de aansluiting van die verdieping
+  (stijgleiding of verdeler). Begin je een leiding óp een bestaande leiding (het punt
+  snapt erop), dan is het een **aftakking**. Klik een leiding aan om haar een naam te
+  geven, de richting om te draaien of haar te verwijderen.
+* Het tabblad **Schema** tekent hieruit automatisch een hydraulisch schema: warmtebron
+  links, per plattegrond een verdieping, elementen in de volgorde langs de leiding en
+  elke aftakking als eigen tak. Een element hangt aan de dichtstbijzijnde leiding;
+  ligt er geen leiding in de buurt, dan direct aan de verdieping (dat meldt het schema).
+  Vloerverwarmingsgroepen komen per verdieping samen op een **verdeler**. Elk element
+  toont zijn status-kleur en standadvies; klik erop om het op de plattegrond te openen.
+* **Componenten** voeg je toe met de knoppen boven het schema:
+  * **Secundaire pomp** en **mengklep** — op de hoofdleiding, een verdieping of de
+    verdeler van de vloerverwarming;
+  * **buffervat** en **boilervat** — bij de warmtebron (buffervat in de hoofdleiding,
+    boilervat via een driewegklep);
+  * **thermostaat** — regelt de warmtebron, een verdieping of de vloerverwarming
+    (gestippelde regellijn).
+
+  Het schema waarschuwt bij een buffervat zonder pomp op de hoofdleiding en bij een
+  mengklep zonder eigen pomp. Met **SVG** download je het schema.
+
 ## Rekenmethode
 
 Het afgegeven vermogen volgt de EN 442-karakteristiek

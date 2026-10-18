@@ -5,6 +5,7 @@
 const S = {
   projects: [], project: null, analysis: null,
   fpId: null, selectedId: null, mode: "plan", zoom: 1, compact: false,
+  pipeId: null, draw: null, schema: null, schemaZoom: 1,
 };
 const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
 
@@ -70,8 +71,14 @@ async function api(method, path, body) {
 function setProject(data) {
   S.project = data.project;
   S.analysis = data.analysis;
+  S.schema = data.schema;
   if (!S.project.floorplans.some((f) => f.id === S.fpId)) S.fpId = S.project.floorplans[0]?.id || null;
   if (S.selectedId && !S.project.emitters.some((e) => e.id === S.selectedId)) S.selectedId = null;
+  if (S.pipeId && !curPipes().some((l) => l.id === S.pipeId)) S.pipeId = null;
+}
+
+function curPipes() {
+  return S.project.floorplans.find((f) => f.id === S.fpId)?.pipes || [];
 }
 
 async function mutate(method, path, body, { rerender = true } = {}) {
@@ -203,11 +210,13 @@ function renderProject() {
   $("#top-actions").innerHTML = `
     <button class="btn ${S.mode === "plan" ? "primary" : ""}" data-mode="plan">Plattegrond</button>
     <button class="btn ${S.mode === "table" ? "primary" : ""}" data-mode="table">Meetronde</button>
+    <button class="btn ${S.mode === "schema" ? "primary" : ""}" data-mode="schema">Schema</button>
     <a class="btn" href="api/projects/${p.id}/export.csv" download>CSV</a>
     <button class="icon-btn" id="btn-settings" title="Projectinstellingen">⚙</button>`;
-  $$("[data-mode]").forEach((b) => (b.onclick = () => { S.mode = b.dataset.mode; renderProject(); }));
+  $$("[data-mode]").forEach((b) => (b.onclick = () => { S.mode = b.dataset.mode; S.draw = null; renderProject(); }));
   $("#btn-settings").onclick = editSettings;
   if (S.mode === "table") renderTable();
+  else if (S.mode === "schema") renderSchema();
   else renderPlan();
 }
 
@@ -223,7 +232,7 @@ function tabsHtml() {
 
 function bindTabs(root) {
   $$("[data-fp]", root).forEach((b) => {
-    b.onclick = () => { S.fpId = b.dataset.fp; S.selectedId = null; renderProject(); };
+    b.onclick = () => { S.fpId = b.dataset.fp; S.selectedId = null; S.pipeId = null; S.draw = null; renderProject(); };
     b.ondblclick = () => editFloorplan(b.dataset.fp);
   });
   $("#btn-upload", root).onclick = () => $("#file", root).click();
@@ -241,7 +250,11 @@ function renderPlan() {
         <div class="toolbar">
           ${Object.entries(TYPES).map(([k, t]) => `
             <div class="chip" data-type="${k}" title="Sleep naar de plattegrond">${markerIcon(k, "geen_meting")}${t.label}</div>`).join("")}
-          <span class="hint">← sleep op de plattegrond · klik een element om waarden in te voeren</span>
+          <button class="btn ${S.draw ? "primary" : ""}" id="btn-pipe" title="Leidingverloop intekenen voor het hydraulisch schema">✎ Leiding</button>
+          ${S.draw ? `<button class="btn" id="btn-pipe-done">Klaar</button>
+            <span class="hint">klik punten · dubbelklik/Enter = leiding klaar · Backspace = punt terug ·
+              Shift = haaks · Esc = stoppen. Begin een aftakking óp een bestaande leiding.</span>`
+          : `<span class="hint">← sleep op de plattegrond · klik een element om waarden in te voeren</span>`}
           <span class="spacer"></span>
           <button class="icon-btn" data-zoom="-1" title="Uitzoomen">−</button>
           <button class="icon-btn" data-zoom="0" title="Passend">⤢</button>
@@ -249,8 +262,9 @@ function renderPlan() {
           <button class="icon-btn" id="btn-compact" title="Namen tonen/verbergen">${S.compact ? "Aa" : "A"}</button>
         </div>` : ""}
         <div class="plan-scroll" id="plan-scroll">
-          ${fp ? `<div class="plan ${S.compact ? "compact" : ""}" id="plan">
+          ${fp ? `<div class="plan ${S.compact ? "compact" : ""} ${S.draw ? "drawing" : ""}" id="plan">
               <img src="api/projects/${p.id}/floorplans/${fp.id}/image" alt="${esc(fp.name)}" id="plan-img">
+              <svg class="pipes" id="pipes" viewBox="0 0 1 1" preserveAspectRatio="none">${pipesSvg(fp)}</svg>
               ${p.emitters.filter((e) => e.floorplan_id === fp.id).map(markerHtml).join("")}
             </div>`
           : `<div class="dropzone" id="dropzone"><p><b>Upload een plattegrond</b></p>
@@ -276,8 +290,14 @@ function renderPlan() {
       sizePlan();
     }));
     $("#btn-compact").onclick = () => { S.compact = !S.compact; renderPlan(); };
+    $("#btn-pipe").onclick = () => {
+      S.draw = S.draw ? null : []; S.selectedId = null; S.pipeId = null; renderPlan();
+    };
+    if (S.draw) $("#btn-pipe-done").onclick = () => finishPipe(true);
+    bindPipes();
     $("#plan").addEventListener("pointerdown", (ev) => {
-      if (ev.target.id === "plan" && S.selectedId) { S.selectedId = null; renderPlan(); }
+      if (S.draw || !["plan", "pipes"].includes(ev.target.id)) return;
+      if (S.selectedId || S.pipeId) { S.selectedId = null; S.pipeId = null; renderPlan(); }
     });
   }
   renderSide();
@@ -340,6 +360,7 @@ function bindMarker(el) {
       el.removeEventListener("pointercancel", up);
       el.classList.remove("dragging");
       const id = el.dataset.id;
+      S.pipeId = null;
       if (moved && pos) {
         S.selectedId = id;
         await mutate("PUT", `emitters/${id}`, { x: pos.x, y: pos.y }).catch(() => renderPlan());
@@ -389,6 +410,132 @@ function bindPaletteChip(chip) {
   });
 }
 
+// ---- leidingverloop -----------------------------------------------------
+
+const ptsAttr = (pts) => pts.map((q) => `${q[0]},${q[1]}`).join(" ");
+
+function pipesSvg(fp) {
+  const ls = fp.pipes || [];
+  return ls.map((l, i) => `<g class="pipe ${l.id === S.pipeId ? "selected" : ""}" data-pipe="${l.id}">
+      <title>${esc(l.name || `Leiding ${i + 1}`)}</title>
+      <polyline class="hit" points="${ptsAttr(l.points)}" vector-effect="non-scaling-stroke"/>
+      <polyline class="sup" points="${ptsAttr(l.points)}" vector-effect="non-scaling-stroke"/>
+      <polyline class="ret" points="${ptsAttr(l.points)}" vector-effect="non-scaling-stroke"/>
+      <polyline class="start" points="${ptsAttr([l.points[0], l.points[0]])}" vector-effect="non-scaling-stroke"/>
+    </g>`).join("") +
+    `<polyline class="draft" id="draft" points="${S.draw ? ptsAttr(S.draw) : ""}" vector-effect="non-scaling-stroke"/>`;
+}
+
+function updateDraft(extra) {
+  const d = $("#draft");
+  if (d) d.setAttribute("points", ptsAttr(extra ? [...S.draw, extra] : S.draw));
+}
+
+// Klikpunt → plattegrondcoördinaat, met Shift haaks en anders snappen op bestaande leidingen.
+function pipePoint(ev) {
+  const rect = $("#plan").getBoundingClientRect();
+  let px = ev.clientX - rect.left, py = ev.clientY - rect.top;
+  const last = S.draw[S.draw.length - 1];
+  if (ev.shiftKey && last) {
+    const lx = last[0] * rect.width, ly = last[1] * rect.height;
+    if (Math.abs(px - lx) > Math.abs(py - ly)) py = ly; else px = lx;
+  } else {
+    let best = 12, snap = null;
+    const lines = [...curPipes().map((l) => l.points), S.draw];
+    for (const pts of lines) {
+      for (let i = 0; i < pts.length; i++) {
+        const a = [pts[i][0] * rect.width, pts[i][1] * rect.height];
+        const d = Math.hypot(px - a[0], py - a[1]);
+        if (d < best) { best = d; snap = a; }
+        if (i + 1 >= pts.length) continue;
+        const b = [pts[i + 1][0] * rect.width, pts[i + 1][1] * rect.height];
+        const dx = b[0] - a[0], dy = b[1] - a[1], ll = dx * dx + dy * dy;
+        const t = ll ? Math.max(0, Math.min(1, ((px - a[0]) * dx + (py - a[1]) * dy) / ll)) : 0;
+        const q = [a[0] + t * dx, a[1] + t * dy], dq = Math.hypot(px - q[0], py - q[1]);
+        if (dq < best - 4) { best = dq; snap = q; }
+      }
+    }
+    if (snap) [px, py] = snap;
+  }
+  return { pt: [clamp01(px / rect.width), clamp01(py / rect.height)], px, py, rect };
+}
+
+function bindPipes() {
+  const plan = $("#plan");
+  $$("[data-pipe]", plan).forEach((g) => g.addEventListener("pointerdown", (ev) => {
+    if (S.draw) return;
+    ev.stopPropagation();
+    S.pipeId = g.dataset.pipe; S.selectedId = null;
+    renderPlan();
+  }));
+  if (!S.draw) return;
+  plan.addEventListener("pointermove", (ev) => { if (S.draw.length) updateDraft(pipePoint(ev).pt); });
+  plan.addEventListener("pointerdown", (ev) => {
+    if (ev.button !== 0) return;
+    ev.preventDefault();
+    const { pt, px, py, rect } = pipePoint(ev);
+    const last = S.draw[S.draw.length - 1];
+    // nogmaals op hetzelfde punt (dubbelklik/dubbeltik) = leiding klaar
+    if (last && Math.hypot(px - last[0] * rect.width, py - last[1] * rect.height) < 5) {
+      finishPipe(false);
+      return;
+    }
+    S.draw.push(pt);
+    updateDraft();
+  });
+}
+
+async function finishPipe(stop) {
+  const pts = S.draw || [];
+  if (pts.length >= 2) {
+    S.draw = stop ? null : [];
+    await mutate("POST", `floorplans/${S.fpId}/pipes`, { points: pts });
+    toast("Leiding opgeslagen");
+  } else {
+    if (pts.length) toast("Een leiding heeft minstens twee punten", true);
+    S.draw = stop ? null : [];
+    renderPlan();
+  }
+}
+
+document.addEventListener("keydown", (ev) => {
+  if (!S.draw || S.mode !== "plan" || ev.target.closest?.("input, textarea, select, dialog")) return;
+  if (ev.key === "Enter") { ev.preventDefault(); finishPipe(false); }
+  else if (ev.key === "Escape") {
+    ev.preventDefault();
+    if (S.draw.length) { S.draw = []; updateDraft(); } else { S.draw = null; renderPlan(); }
+  } else if (ev.key === "Backspace") { ev.preventDefault(); S.draw.pop(); updateDraft(); }
+});
+
+function pipePanelHtml(pipe) {
+  const ls = curPipes(), i = ls.indexOf(pipe);
+  return `
+    <div style="display:flex;align-items:center;gap:8px">
+      <button class="icon-btn" id="btn-close" title="Sluiten">←</button>
+      <h2 style="margin:0;flex:1">${esc(pipe.name || `Leiding ${i + 1}`)}</h2>
+    </div>
+    <p class="muted small">Een leiding staat voor het aanvoer/retour-paar en loopt vanaf het
+      beginpunt (de stip). De eerste leiding begint bij de aansluiting van de verdieping; een
+      leiding die op een andere leiding begint is een aftakking. Elementen hangen in het schema aan
+      de dichtstbijzijnde leiding, in volgorde langs de leiding.</p>
+    <label>Naam<input name="name" value="${esc(pipe.name || "")}" placeholder="bijv. Groep woonkamer"></label>
+    <p class="muted small">${pipe.points.length} punten</p>
+    <p><button class="btn" id="btn-reverse">Richting omdraaien</button>
+      <button class="btn danger" id="btn-del-pipe">Leiding verwijderen</button></p>`;
+}
+
+function bindPipePanel(side, pipe) {
+  const path = `floorplans/${S.fpId}/pipes/${pipe.id}`;
+  $("#btn-close", side).onclick = () => { S.pipeId = null; renderPlan(); };
+  $("[name=name]", side).onchange = (ev) => mutate("PUT", path, { name: ev.target.value });
+  $("#btn-reverse", side).onclick = () => mutate("PUT", path, { points: [...pipe.points].reverse() });
+  $("#btn-del-pipe", side).onclick = async () => {
+    if (!confirm("Leiding verwijderen?")) return;
+    S.pipeId = null;
+    await mutate("DELETE", path);
+  };
+}
+
 // ---- zijpaneel ------------------------------------------------------------
 
 function summaryHtml() {
@@ -411,6 +558,12 @@ function summaryHtml() {
 function renderSide() {
   const side = $("#side");
   if (!side) return;
+  const pipe = S.pipeId && curPipes().find((l) => l.id === S.pipeId);
+  if (pipe) {
+    side.innerHTML = pipePanelHtml(pipe);
+    bindPipePanel(side, pipe);
+    return;
+  }
   const em = S.selectedId && emitter(S.selectedId);
   if (!em) {
     const list = S.project.emitters.filter((e) => e.floorplan_id === S.fpId);
@@ -876,6 +1029,284 @@ async function editSettings() {
     });
     toast("Instellingen opgeslagen en herberekend");
   } catch (e) { toast(e.message, true); }
+}
+
+// ---- hydraulisch schema ---------------------------------------------------
+// De boom (verdiepingen → leidingtakken → elementen) komt van de server; hier wordt
+// hij als tweepijps-schema getekend: aanvoer rood boven, retour blauw eronder.
+
+const COMP = {
+  pomp: { label: "Secundaire pomp", attach: ["main", "fp", "ufh"] },
+  mengklep: { label: "Mengklep", attach: ["main", "fp", "ufh"] },
+  buffervat: { label: "Buffervat", attach: ["source"] },
+  boilervat: { label: "Boilervat", attach: ["source"] },
+  thermostaat: { label: "Thermostaat", attach: ["source", "fp", "ufh"] },
+};
+const SOURCE_LABEL = { ketel: "Cv-ketel", warmtepomp: "Warmtepomp", anders: "Warmtebron" };
+const SC = { G: 14, COL: 78, EM_TOP: 36, EM_H: 26, ROW: 150, Y0: 140 };
+const ST_COLOR = { ok: "#2f9e44", open: "#e8590c", dicht: "#1971c2", ongeldig: "#868e96", geen_meting: "#adb5bd" };
+
+function attachOptions(type) {
+  const p = S.project, out = [];
+  for (const a of COMP[type].attach) {
+    if (a === "source") out.push(["source", `${SOURCE_LABEL[p.settings.heat_source] || "Warmtebron"}`]);
+    if (a === "main") out.push(["main", "Hoofdleiding (na de warmtebron)"]);
+    if (a === "fp") p.floorplans.forEach((f) => out.push([`fp:${f.id}`, `Verdieping: ${f.name}`]));
+    if (a === "ufh") p.floorplans.filter((f) => p.emitters.some((e) => e.floorplan_id === f.id && e.type === "vloerverwarming"))
+      .forEach((f) => out.push([`ufh:${f.id}`, `Verdeler vloerverwarming: ${f.name}`]));
+  }
+  return out;
+}
+function attachLabel(c) {
+  return (attachOptions(c.type).find(([k]) => k === c.attach) || [, "–"])[1];
+}
+
+function compsAt(attach, ...types) {
+  return (S.project.components || []).filter((c) => (c.attach || "main") === attach && (!types.length || types.includes(c.type)));
+}
+
+const shortName = (s, n = 11) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+const line = (x1, y1, x2, y2, cls) => `<line class="${cls}" x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}"/>`;
+const dot = (x, y, cls) => `<circle class="dot ${cls}" cx="${x}" cy="${y}" r="2.6"/>`;
+
+function pumpSym(c, x, y) {
+  return `<g class="comp" data-comp="${c.id}"><title>${esc(c.name)}</title>
+    <circle cx="${x}" cy="${y}" r="10" class="sym"/><path d="M${x - 4},${y + 6} L${x + 7},${y} L${x - 4},${y - 6} Z" class="symfill"/></g>`;
+}
+function mixSym(c, x, y, vertical) {
+  const d = vertical ? `M${x - 8},${y - 8} L${x + 8},${y - 8} L${x - 8},${y + 8} L${x + 8},${y + 8} Z`
+    : `M${x - 8},${y - 8} L${x - 8},${y + 8} L${x + 8},${y - 8} L${x + 8},${y + 8} Z`;
+  return `<g class="comp" data-comp="${c.id}"><title>${esc(c.name)}</title>
+    <path d="${d}" class="sym"/><path d="M${x},${y} L${x - 9},${y}" class="sym"/><text x="${x - 12}" y="${y + 3}" class="t9" text-anchor="end">M</text></g>`;
+}
+function thermoSym(c, x, y) {
+  return `<g class="comp" data-comp="${c.id}"><title>${esc(c.name)}</title>
+    <rect x="${x - 11}" y="${y - 11}" width="22" height="22" rx="4" class="sym"/>
+    <text x="${x}" y="${y + 4}" class="t11 b" text-anchor="middle">T</text>
+    <text x="${x}" y="${y - 15}" class="t9" text-anchor="middle">${esc(shortName(c.name, 16))}</text></g>`;
+}
+
+function emitterSym(id, x, y, out) {
+  const e = emitter(id);
+  if (!e) return;
+  const r = result(id), st = r.status || "geen_meting";
+  const cx = x + SC.COL / 2, top = y + SC.EM_TOP, w = 44, h = SC.EM_H, l = cx - w / 2;
+  out.rows.push(line(cx - 10, y, cx - 10, top, "sup"), line(cx + 10, top, cx + 10, y + SC.G, "ret"));
+  out.over.push(line(cx - 10, y + SC.G - 4, cx - 10, y + SC.G + 4, "gap"), line(cx - 10, y, cx - 10, top, "sup"),
+    dot(cx - 10, y, "sup"), dot(cx + 10, y + SC.G, "ret"));
+  let inner = "";
+  if (e.type === "vloerverwarming") {
+    inner = `<polyline class="coil" points="${[0, 1, 2, 3, 4, 5, 6].map((i) => `${l + 5 + i * 5.6},${i % 2 ? top + h - 5 : top + 5}`).join(" ")}"/>`;
+  } else if (e.type === "convector") {
+    inner = `<line class="coil" x1="${l + 4}" y1="${top + h - 4}" x2="${l + w - 4}" y2="${top + 4}"/>`;
+  } else {
+    inner = [1, 2, 3, 4, 5].map((i) => line(l + i * w / 6, top + 4, l + i * w / 6, top + h - 4, "coil")).join("");
+  }
+  const adv = r.stale ? "meten" : (st === "open" || st === "dicht") && r.preset_advice_label
+    ? `${r.preset_basis_label} → ${r.preset_advice_label}` : r.dt !== undefined && st !== "ongeldig" ? `ΔT ${fmt(r.dt, 1)}` : "";
+  out.over.push(`<g class="em" data-em="${id}"><title>${esc(e.name)}${e.room ? " · " + esc(e.room) : ""}: ${esc(r.advice || "")}</title>
+    <rect x="${l}" y="${top}" width="${w}" height="${h}" rx="3" class="body" style="stroke:${ST_COLOR[st]}"/>${inner}
+    <text x="${cx}" y="${top + h + 13}" class="t10 b" text-anchor="middle">${esc(shortName(e.name))}</text>
+    ${e.room ? `<text x="${cx}" y="${top + h + 25}" class="t9 m" text-anchor="middle">${esc(shortName(e.room, 13))}</text>` : ""}
+    ${adv ? `<text x="${cx}" y="${top + h + (e.room ? 37 : 25)}" class="t9 b" text-anchor="middle" style="fill:${ST_COLOR[st]}">${esc(adv)}</text>` : ""}
+  </g>`);
+  out.maxY = Math.max(out.maxY, top + h + 40);
+}
+
+function layChildren(children, x0, y, out) {
+  let x = x0;
+  for (const c of children) {
+    if (c.kind === "emitter") { emitterSym(c.id, x, y, out); x += SC.COL; }
+    else x += layBranch(c, x, y, out) + 8;
+  }
+  return Math.max(x - x0, SC.COL);
+}
+
+function layBranch(node, x, y, out) {
+  const { G, ROW } = SC;
+  const y2 = y + ROW, sx = x + 8, rx = sx + G, start = rx + 14;
+  const attach = node.kind === "floor" ? `fp:${node.id}` : node.kind === "verdeler" ? node.id : null;
+  const w = layChildren(node.children, start, y2, out);
+  const end = start + w - 12;
+  const bar = node.kind === "verdeler" ? " manifold" : "";
+  out.rows.push(line(sx, y2, end, y2, "sup" + bar), line(rx, y2 + G, end, y2 + G, "ret" + bar),
+    line(rx, y + G, rx, y2 + G, "ret"));
+  out.over.push(line(sx, y + G - 4, sx, y + G + 4, "gap"), line(sx, y, sx, y2, "sup"), dot(sx, y, "sup"), dot(rx, y + G, "ret"));
+  const label = node.kind === "floor" ? node.label : node.kind === "verdeler" ? "Verdeler vloerverwarming" : node.label;
+  if (label) {
+    out.over.push(`<text x="${start}" y="${y2 - 12}" class="${node.kind === "floor" ? "t13 b" : "t10 m"}">${esc(label)}</text>`);
+  }
+  if (attach) {
+    let cy = y + G + 30, pumpY = null;
+    for (const c of compsAt(attach, "pomp", "mengklep")) {
+      out.over.push(c.type === "pomp" ? pumpSym(c, sx, cy) : mixSym(c, sx, cy, true));
+      if (c.type === "pomp" && pumpY === null) pumpY = cy;
+      cy += 30;
+    }
+    compsAt(attach, "thermostaat").forEach((c, i) => {
+      const tx = start + 30 + i * 70, ty = y2 - 50;
+      out.over.push(`<path class="ctrl" d="M${tx - 11},${ty} L${sx + 12},${ty} L${sx + 12},${pumpY ?? ty}"/>`, thermoSym(c, tx, ty));
+    });
+  }
+  return end - x + 12;
+}
+
+function buildSchemaSvg() {
+  const sch = S.schema, p = S.project, { G, Y0 } = SC;
+  const out = { rows: [], over: [], maxY: Y0 + 80 };
+  const boilers = compsAt("source", "boilervat");
+  const srcW = Math.max(90, boilers.length * 80 - 10), sx0 = 30, sx1 = sx0 + srcW;
+  const src = sch.source;
+  const supply = cvLabel(p.settings);
+  out.over.push(`<g class="src"><rect x="${sx0}" y="${Y0 - 30}" width="${srcW}" height="${G + 60}" rx="6" class="body src"/>
+    <text x="${sx0 + srcW / 2}" y="${Y0 + G / 2 - 2}" class="t12 b" text-anchor="middle">${esc(SOURCE_LABEL[src] || "Warmtebron")}</text>
+    ${supply ? `<text x="${sx0 + srcW / 2}" y="${Y0 + G / 2 + 12}" class="t10 m" text-anchor="middle">${esc(supply)}</text>` : ""}</g>`);
+  // thermostaten op de warmtebron
+  compsAt("source", "thermostaat").concat(compsAt("main", "thermostaat")).forEach((c, i) => {
+    const tx = sx0 + 20 + i * 60, ty = Y0 - 70;
+    out.over.push(`<path class="ctrl" d="M${tx},${ty + 11} L${tx},${Y0 - 30}"/>`, thermoSym(c, tx, ty));
+  });
+  // boilervaten onder de warmtebron, via een driewegklep
+  boilers.forEach((c, i) => {
+    const bx = sx0 + i * 80, by = Y0 + G + 75, top = Y0 + G + 30;
+    out.over.push(line(bx + 22, top, bx + 22, by, "sup"), line(bx + 48, by, bx + 48, top, "ret"),
+      `<g class="comp" data-comp="${c.id}"><title>${esc(c.name)}</title>
+        <path d="M${bx + 14},${by - 28} L${bx + 30},${by - 28} L${bx + 22},${by - 16} Z M${bx + 14},${by - 4} L${bx + 30},${by - 4} L${bx + 22},${by - 16} Z" class="sym"/>
+        <rect x="${bx + 5}" y="${by}" width="60" height="78" rx="22" class="body"/>
+        <polyline class="coil" points="${[0, 1, 2, 3, 4, 5].map((k) => `${k % 2 ? bx + 48 : bx + 22},${by + 18 + k * 9}`).join(" ")}"/>
+        <text x="${bx + 35}" y="${by + 94}" class="t10 b" text-anchor="middle">${esc(shortName(c.name, 14))}</text></g>`);
+    out.maxY = Math.max(out.maxY, by + 100);
+  });
+  // in de hoofdleiding: buffervat(en), dan pompen/mengklep op de hoofdleiding
+  let x = sx1 + 20;
+  for (const c of compsAt("source", "buffervat")) {
+    out.rows.push(line(x - 20, Y0, x, Y0, "sup"), line(x - 20, Y0 + G, x, Y0 + G, "ret"));
+    out.over.push(`<g class="comp" data-comp="${c.id}"><title>${esc(c.name)}</title>
+      <rect x="${x}" y="${Y0 - 40}" width="44" height="${G + 80}" rx="14" class="body"/>
+      <text x="${x + 22}" y="${Y0 + G + 56}" class="t10 b" text-anchor="middle">${esc(shortName(c.name, 14))}</text></g>`);
+    x += 64;
+  }
+  const mainStart = x - 20;
+  for (const c of compsAt("main", "pomp", "mengklep")) {
+    out.over.push(c.type === "pomp" ? pumpSym(c, x + 4, Y0) : mixSym(c, x + 4, Y0, false));
+    x += 34;
+  }
+  const w = sch.floors.length ? layChildren(sch.floors, x, Y0, out) : 0;
+  const end = Math.max(x + w - 12, x + 40);
+  out.rows.unshift(line(mainStart, Y0, end, Y0, "sup"), line(mainStart, Y0 + G, end, Y0 + G, "ret"));
+  const W = end + 40, H = out.maxY + 30;
+  return { W, H, svg: `<svg xmlns="http://www.w3.org/2000/svg" class="schema-svg" id="schema-svg" viewBox="0 0 ${W} ${H}"
+      width="${W * S.schemaZoom}" height="${H * S.schemaZoom}" font-family="system-ui, sans-serif">
+    <style>${SCHEMA_CSS}</style>
+    <rect x="0" y="0" width="${W}" height="${H}" fill="#fff"/>
+    <text x="16" y="24" class="t14 b">${esc(p.name)} — hydraulisch schema</text>
+    <g>${out.rows.join("")}</g><g>${out.over.join("")}</g></svg>` };
+}
+
+function cvLabel(set) {
+  return set.supply_temp !== null && set.supply_temp !== undefined ? `aanvoer ${fmt(set.supply_temp, 0)} °C` : "";
+}
+
+const SCHEMA_CSS = `
+  line, polyline, path { fill: none; stroke-linecap: round; }
+  .sup { stroke: #e03131; stroke-width: 2.5; } .ret { stroke: #1c7ed6; stroke-width: 2.5; }
+  .manifold { stroke-width: 5; } .gap { stroke: #fff; stroke-width: 7; }
+  .dot.sup { fill: #e03131; stroke: none; } .dot.ret { fill: #1c7ed6; stroke: none; }
+  .body { fill: #f8f9fa; stroke: #495057; stroke-width: 2; } .src { fill: #fff4e6; stroke: #e8590c; }
+  .coil { stroke: #868e96; stroke-width: 1.4; }
+  .sym { fill: #fff; stroke: #212529; stroke-width: 1.8; } .symfill { fill: #212529; }
+  .ctrl { stroke: #7048e8; stroke-width: 1.4; stroke-dasharray: 4 3; }
+  text { fill: #212529; } .m { fill: #6c757d; } .b { font-weight: 600; }
+  .t9 { font-size: 9px; } .t10 { font-size: 10px; } .t11 { font-size: 11px; } .t12 { font-size: 12px; }
+  .t13 { font-size: 13px; } .t14 { font-size: 14px; }
+  .em, .comp { cursor: pointer; } .em:hover .body, .comp:hover .sym, .comp:hover .body { stroke-width: 3; }`;
+
+function renderSchema() {
+  const view = $("#view"), sch = S.schema;
+  const built = buildSchemaSvg();
+  const comps = S.project.components || [];
+  view.innerHTML = `
+    <div class="workspace">
+      <div class="plan-area">
+        <div class="toolbar">
+          ${Object.entries(COMP).map(([k, c]) => `<button class="btn small" data-add-comp="${k}">+ ${c.label}</button>`).join("")}
+          <span class="spacer"></span>
+          <button class="icon-btn" data-szoom="-1" title="Uitzoomen">−</button>
+          <button class="icon-btn" data-szoom="0" title="Passend">⤢</button>
+          <button class="icon-btn" data-szoom="1" title="Inzoomen">+</button>
+          <button class="btn small" id="btn-svg" title="Schema downloaden als SVG">SVG</button>
+        </div>
+        <div class="plan-scroll" id="schema-scroll"><div class="schema-wrap">${built.svg}</div></div>
+      </div>
+      <aside class="side">
+        <h3 style="margin-top:0">Hydraulisch schema</h3>
+        <p class="muted small">Opgebouwd uit de plattegronden: elke plattegrond is een verdieping,
+          de elementen staan in de volgorde van het ingetekende leidingverloop (✎ Leiding op de
+          plattegrond). Vloerverwarmingsgroepen komen samen op een verdeler. Klik op een element om
+          het op de plattegrond te openen.</p>
+        <div class="legend small">
+          <span><i style="background:#e03131"></i>aanvoer</span><span><i style="background:#1c7ed6"></i>retour</span>
+          <span><i class="dash"></i>regeling</span>
+        </div>
+        ${sch.notes.map((n) => `<div class="notice warn">${esc(n)}</div>`).join("")}
+        ${!sch.floors.length ? `<div class="notice">Nog geen elementen: plaats eerst radiatoren of vloerverwarming op een plattegrond.</div>` : ""}
+        <h3>Componenten</h3>
+        ${comps.length ? `<ul class="list">${comps.map((c) => `<li data-comp="${c.id}"><div class="grow">
+            <div><b>${esc(c.name)}</b> <span class="muted">${esc(COMP[c.type]?.label || c.type)}</span></div>
+            <div class="muted small">${esc(attachLabel(c))}</div></div></li>`).join("")}</ul>`
+          : `<p class="muted small">Voeg met de knoppen boven het schema een secundaire pomp, boilervat,
+              buffervat, thermostaat of mengklep toe.</p>`}
+      </aside>
+    </div>`;
+  $$("[data-add-comp]", view).forEach((b) => (b.onclick = () => editComponent(null, b.dataset.addComp)));
+  $$("[data-comp]", view).forEach((el) => (el.onclick = () => editComponent(el.dataset.comp)));
+  $$("[data-em]", view).forEach((el) => (el.onclick = () => {
+    const e = emitter(el.dataset.em);
+    S.mode = "plan"; S.fpId = e.floorplan_id || S.fpId; S.selectedId = e.id; S.pipeId = null;
+    renderProject();
+  }));
+  $$("[data-szoom]", view).forEach((b) => (b.onclick = () => {
+    const z = Number(b.dataset.szoom), sc = $("#schema-scroll");
+    S.schemaZoom = z === 0 ? Math.min(2, (sc.clientWidth - 32) / built.W)
+      : Math.min(4, Math.max(0.2, S.schemaZoom * (z > 0 ? 1.3 : 1 / 1.3)));
+    renderSchema();
+  }));
+  $("#btn-svg").onclick = () => {
+    const blob = new Blob([buildSchemaSvg().svg], { type: "image/svg+xml" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `${S.project.name.replace(/[^\w\- ]+/g, "").trim() || "schema"} - schema.svg`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  };
+}
+
+async function editComponent(cid, newType) {
+  const c = cid ? S.project.components.find((x) => x.id === cid) : { type: newType, name: "", attach: null, notes: "" };
+  const opts = attachOptions(c.type);
+  const attach = c.attach || (COMP[c.type].attach.includes("source") ? "source" : "main");
+  const body = await dialog(cid ? c.name : `${COMP[c.type].label} toevoegen`, `
+    <label>Naam<input name="name" value="${esc(c.name)}" placeholder="${esc(COMP[c.type].label)}"></label>
+    ${opts.length > 1 ? `<label>${c.type === "thermostaat" ? "Regelt" : "Plaats in het schema"}<select name="attach">
+      ${opts.map(([k, l]) => `<option value="${esc(k)}" ${k === attach ? "selected" : ""}>${esc(l)}</option>`).join("")}
+    </select></label>` : `<p class="muted small">Wordt bij de warmtebron getekend.</p>`}
+    <label>Notities<textarea name="notes" placeholder="bijv. merk/type, instelling">${esc(c.notes || "")}</textarea></label>
+    ${cid ? `<p><button type="button" class="btn danger" id="btn-del-comp">Verwijderen</button></p>` : ""}`, {
+    ok: cid ? "Opslaan" : "Toevoegen",
+    onOpen: (b) => {
+      const del = $("#btn-del-comp", b);
+      if (del) del.onclick = async () => {
+        if (!confirm(`'${c.name}' verwijderen?`)) return;
+        $("#dlg").close("cancel");
+        await mutate("DELETE", `components/${cid}`);
+      };
+    },
+  });
+  if (!body) return;
+  const data = { name: $("[name=name]", body).value || undefined, notes: $("[name=notes]", body).value,
+    attach: $("[name=attach]", body)?.value || attach };
+  if (cid) await mutate("PUT", `components/${cid}`, data);
+  else await mutate("POST", "components", { type: c.type, ...data });
 }
 
 // ---- start ----------------------------------------------------------------

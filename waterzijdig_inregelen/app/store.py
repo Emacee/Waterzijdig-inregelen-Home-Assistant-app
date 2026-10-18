@@ -82,6 +82,9 @@ class Store:
         p.setdefault("valve_types", copy.deepcopy(DEFAULT_VALVE_TYPES))
         p.setdefault("floorplans", [])
         p.setdefault("emitters", [])
+        p.setdefault("components", [])
+        for fp in p["floorplans"]:
+            fp.setdefault("pipes", [])
         return p
 
     def save(self, p: Dict[str, Any]) -> Dict[str, Any]:
@@ -101,7 +104,7 @@ class Store:
             "notes": "", "created": now_iso(), "updated": now_iso(),
             "settings": {**copy.deepcopy(DEFAULT_SETTINGS), **(settings or {})},
             "valve_types": copy.deepcopy(DEFAULT_VALVE_TYPES),
-            "floorplans": [], "emitters": [],
+            "floorplans": [], "emitters": [], "components": [],
         }
         return self.save(p)
 
@@ -119,7 +122,7 @@ class Store:
             p = self.get(pid)
             fid = new_id()
             fp = {"id": fid, "name": name or f"Plattegrond {len(p['floorplans']) + 1}",
-                  "file": f"{fid}.{ext}", "width": width, "height": height}
+                  "file": f"{fid}.{ext}", "width": width, "height": height, "pipes": []}
             os.makedirs(os.path.join(self._dir(pid), "floorplans"), exist_ok=True)
             with open(self.floorplan_path(pid, fp), "wb") as fh:
                 fh.write(data)
@@ -136,6 +139,9 @@ class Store:
                 pass
             p["floorplans"] = [f for f in p["floorplans"] if f["id"] != fid]
             p["emitters"] = [e for e in p["emitters"] if e.get("floorplan_id") != fid]
+            for c in p.get("components") or []:
+                if c.get("attach") in (f"fp:{fid}", f"ufh:{fid}"):
+                    c["attach"] = "source" if c.get("type") == "thermostaat" else "main"
             return self.save(p)
 
 
