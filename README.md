@@ -23,7 +23,7 @@ berekend. De add-on draait volledig lokaal en opent via de Home Assistant-zijbal
 
 | Add-on | Slug | Versie | Beschrijving |
 |---|---|---|---|
-| [Waterzijdig Inregelen](waterzijdig_inregelen/README.md) | `waterzijdig_inregelen` | 0.1.1 | Plattegronden, radiatoren/vloerverwarming slepen, metingen en per element advies verder open/dicht met nieuwe voorinstelling |
+| [Waterzijdig Inregelen](waterzijdig_inregelen/README.md) | `waterzijdig_inregelen` | 0.1.2 | Plattegronden, radiatoren/vloerverwarming slepen, metingen en per element advies verder open/dicht met nieuwe voorinstelling |
 
 ## Functies
 

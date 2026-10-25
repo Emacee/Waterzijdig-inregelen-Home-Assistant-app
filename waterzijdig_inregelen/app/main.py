@@ -11,12 +11,14 @@ import io
 import json
 import logging
 import os
-from typing import Any, Dict, List, Literal, Optional
+from datetime import datetime
+from typing import Any, Dict, List, Literal, Optional, Tuple
+from urllib.parse import quote
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import __version__
 from .balance import analyze
@@ -37,9 +39,34 @@ def _options() -> Dict[str, Any]:
 OPTIONS = _options()
 MAX_UPLOAD = int(OPTIONS.get("max_upload_mb", 25)) * 1024 * 1024
 store = Store(os.environ.get("DATA_DIR", "/data"))
+# Alleen de ingress-proxy van Home Assistant mag de app bereiken (run.sh zet dit); leeg = iedereen
+# (lokaal ontwikkelen en tests).
+ALLOWED_CLIENTS = {h for h in os.environ.get("ALLOWED_CLIENTS", "").split(",") if h}
 
-app = FastAPI(title="Waterzijdig Inregelen", version=__version__)
+# Geen /docs of /openapi.json: de UI is de enige client.
+app = FastAPI(title="Waterzijdig Inregelen", version=__version__,
+              docs_url=None, redoc_url=None, openapi_url=None)
 app.mount("/static", StaticFiles(directory=os.path.join(_WEB, "static")), name="static")
+
+_CSP = ("default-src 'self'; script-src 'self'; worker-src 'self' blob:; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; "
+        "object-src 'none'; base-uri 'none'; form-action 'self'")
+
+
+@app.middleware("http")
+async def _guard(request: Request, call_next):
+    if ALLOWED_CLIENTS and (request.client is None or request.client.host not in ALLOWED_CLIENTS):
+        return JSONResponse({"detail": "Alleen bereikbaar via Home Assistant"}, status_code=403)
+    # Grote bodies weigeren vóórdat ze geparsed (en naar schijf gespoold) worden.
+    length = request.headers.get("content-length")
+    if length and length.isdigit() and int(length) > MAX_UPLOAD + 1024 * 1024:
+        return JSONResponse({"detail": f"Bestand groter dan {MAX_UPLOAD // 1024 // 1024} MB"},
+                            status_code=413)
+    response = await call_next(request)
+    response.headers.setdefault("Content-Security-Policy", _CSP)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    return response
 
 
 @app.exception_handler(NotFound)
@@ -78,10 +105,19 @@ class Settings(_M):
 
 
 class ValveType(_M):
-    id: str = Field(..., min_length=1, max_length=40)
+    id: str = Field(..., min_length=1, max_length=40, pattern=r"^[A-Za-z0-9_-]+$")
     name: str = Field(..., max_length=100)
     resolution: float = Field(0.5, ge=0, le=100)
-    steps: List[List[Any]] = Field(..., min_length=1, max_length=100)
+    # (stand, kv, label)
+    steps: List[Tuple[float, float, str]] = Field(..., min_length=1, max_length=100)
+
+    @field_validator("steps")
+    @classmethod
+    def _check_steps(cls, v):
+        for setting, kv, label in v:
+            if not (0 <= setting <= 1000 and 0 <= kv <= 1000) or len(label) > 20:
+                raise ValueError("stand en kv tussen 0 en 1000, label max. 20 tekens")
+        return v
 
 
 class ProjectUpdate(_M):
@@ -110,7 +146,14 @@ class MeasurementIn(_M):
     t_in: float = Field(..., ge=-10, le=110)
     t_out: float = Field(..., ge=-10, le=110)
     t_room: Optional[float] = Field(None, ge=-10, le=40)
-    ts: Optional[str] = None
+    ts: Optional[str] = Field(None, max_length=40)
+
+    @field_validator("ts")
+    @classmethod
+    def _check_ts(cls, v):
+        if v is not None:
+            datetime.fromisoformat(v)  # ValueError → 422
+        return v
 
 
 class BatchItem(MeasurementIn):
@@ -119,6 +162,11 @@ class BatchItem(MeasurementIn):
 
 class Batch(_M):
     items: List[BatchItem] = Field(..., max_length=500)
+
+
+class FloorplanUpdate(_M):
+    name: Optional[str] = Field(None, max_length=100)
+    order: Optional[int] = Field(None, ge=0, le=1000)
 
 
 # ---- pagina ------------------------------------------------------------------
@@ -185,16 +233,24 @@ async def export_csv(pid: str):
                 "Debiet (l/h)", "Doeldebiet (l/h)", "Factor", "Advies stand", "Advies"])
     for e in p["emitters"]:
         r = a.get(e["id"], {})
-        w.writerow([fps.get(e.get("floorplan_id"), ""), e.get("room", ""), e.get("name", ""),
+        w.writerow(_cells([fps.get(e.get("floorplan_id"), ""), e.get("room", ""), e.get("name", ""),
                     e.get("type", ""), e.get("power_w") or "", e.get("demand_w") or "",
                     e.get("valve_type") or "", e.get("preset") if e.get("preset") is not None else "",
                     r.get("measured_at", ""), r.get("t_in", ""), r.get("t_out", ""),
                     r.get("t_room", ""), r.get("dt", ""), _r(r.get("flow_act")),
                     _r(r.get("flow_target")), _r(r.get("ratio"), 2),
-                    r.get("preset_advice_label", ""), r.get("advice", "")])
+                    r.get("preset_advice_label", ""), r.get("advice", "")]))
     name = "".join(c for c in p["name"] if c.isalnum() or c in " -_").strip() or "project"
+    ascii_name = name.encode("ascii", "ignore").decode().strip() or "project"
     return Response("﻿" + buf.getvalue(), media_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": f'attachment; filename="{name}.csv"'})
+                    headers={"Content-Disposition": f'attachment; filename="{ascii_name}.csv"; '
+                                                    f"filename*=UTF-8''{quote(name)}.csv"})
+
+
+def _cells(row):
+    """Voorkom formule-injectie in Excel: tekst die met = + - @ begint wordt letterlijk."""
+    return [f"'{c}" if isinstance(c, str) and c[:1] in ("=", "+", "-", "@", "\t", "\r") else c
+            for c in row]
 
 
 def _r(v, nd=0):
@@ -232,7 +288,8 @@ async def upload_floorplan(pid: str, file: UploadFile = File(...), name: str = F
         raise HTTPException(415, "Alleen PNG, JPG, GIF of WebP (PDF wordt in de browser omgezet)")
     if not name:
         name = os.path.splitext(file.filename or "")[0][:100]
-    return _out(store.add_floorplan(pid, name[:100], ext, data, max(width, 0), max(height, 0)))
+    return _out(store.add_floorplan(pid, name[:100], ext, data,
+                                    min(max(width, 0), 100000), min(max(height, 0), 100000)))
 
 
 @app.get("/api/projects/{pid}/floorplans/{fid}/image")
@@ -242,20 +299,19 @@ async def floorplan_image(pid: str, fid: str):
     path = store.floorplan_path(pid, fp)
     if not os.path.exists(path):
         raise NotFound(fid)
-    return FileResponse(path, headers={"Cache-Control": "private, max-age=86400",
-                                       "X-Content-Type-Options": "nosniff"})
+    return FileResponse(path, headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.put("/api/projects/{pid}/floorplans/{fid}")
-async def rename_floorplan(pid: str, fid: str, body: Dict[str, Any]):
+async def rename_floorplan(pid: str, fid: str, body: FloorplanUpdate):
     p = store.get(pid)
     fp = find(p["floorplans"], fid)
-    name = str(body.get("name") or "").strip()[:100]
+    name = (body.name or "").strip()
     if name:
         fp["name"] = name
-    if isinstance(body.get("order"), int):
+    if body.order is not None:
         p["floorplans"].remove(fp)
-        p["floorplans"].insert(max(0, min(body["order"], len(p["floorplans"]))), fp)
+        p["floorplans"].insert(min(body.order, len(p["floorplans"])), fp)
     return _out(store.save(p))
 
 

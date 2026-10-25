@@ -63,9 +63,17 @@ optioneel een label: `8=0.56:N`.
   over de ventielen; inregelen blijft daardoor een paar rondes meten en bijstellen.
 * De kv-tabellen zijn indicatief. Gebruik voor een nauwkeurig resultaat de waarden uit
   het datablad van je ventiel.
-* PDF-plattegronden worden in de browser omgezet met pdf.js van cdnjs.cloudflare.com; dat
-  vereist internet op het apparaat waarmee je uploadt. Zonder internet: exporteer de PDF
-  eerst als PNG of JPG.
+* PDF-plattegronden worden in de browser omgezet met pdf.js (meegeleverd met de add-on,
+  dus zonder internet). Maximaal 20 pagina's per PDF.
+
+## Beveiliging
+
+* De add-on is alleen bereikbaar via Home Assistant (ingress): verzoeken die niet van de
+  ingress-proxy komen worden geweigerd, en er wordt geen poort op de host geopend.
+* De web-UI laadt geen scripts van buiten de add-on (Content-Security-Policy) en
+  PDF's worden verwerkt met `isEvalSupported` uit (CVE-2024-4367).
+* Tekst in de CSV-export die met `=`, `+`, `-` of `@` begint krijgt een `'` ervoor, zodat
+  Excel er geen formule van maakt.
 
 ## Opties
 

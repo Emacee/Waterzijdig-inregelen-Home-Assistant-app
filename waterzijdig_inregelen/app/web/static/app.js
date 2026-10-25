@@ -3,10 +3,11 @@
 "use strict";
 
 const S = {
-  projects: [], project: null, analysis: null,
+  projects: [], project: null, analysis: null, results: new Map(),
   fpId: null, selectedId: null, mode: "plan", zoom: 1, compact: false,
 };
-const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+// pdf.js 3.11.174 (Apache-2.0) wordt met de add-on meegeleverd: werkt offline en zonder CDN.
+const PDFJS = "static/pdfjs/";
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
@@ -63,6 +64,7 @@ async function api(method, path, body) {
 function setProject(data) {
   S.project = data.project;
   S.analysis = data.analysis;
+  S.results = new Map(data.analysis.emitters.map((r) => [r.id, r]));
   if (!S.project.floorplans.some((f) => f.id === S.fpId)) S.fpId = S.project.floorplans[0]?.id || null;
   if (S.selectedId && !S.project.emitters.some((e) => e.id === S.selectedId)) S.selectedId = null;
 }
@@ -89,7 +91,7 @@ function toast(msg, error = false) {
   toast._t = setTimeout(() => (t.hidden = true), error ? 5000 : 2200);
 }
 
-function result(id) { return S.analysis?.emitters.find((r) => r.id === id) || {}; }
+function result(id) { return S.results.get(id) || {}; }
 function emitter(id) { return S.project.emitters.find((e) => e.id === id); }
 function valveOf(em) { return S.project.valve_types.find((v) => v.id === em.valve_type); }
 function presetLabel(valve, s) {
@@ -698,7 +700,7 @@ function loadScript(src) {
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
     s.src = src; s.onload = resolve;
-    s.onerror = () => reject(new Error("PDF-ondersteuning kon niet geladen worden (geen internet?). Exporteer de PDF als PNG/JPG."));
+    s.onerror = () => reject(new Error("PDF-ondersteuning kon niet geladen worden. Exporteer de PDF als PNG/JPG."));
     document.head.appendChild(s);
   });
 }
@@ -709,7 +711,10 @@ async function pdfToImages(file) {
     await loadScript(PDFJS + "pdf.min.js");
     window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js";
   }
-  const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  // isEvalSupported: false sluit CVE-2024-4367 (code uitvoeren via een kwaadaardig PDF-font).
+  const pdf = await window.pdfjsLib.getDocument({
+    data: await file.arrayBuffer(), isEvalSupported: false, enableXfa: false,
+  }).promise;
   const out = [];
   for (let i = 1; i <= Math.min(pdf.numPages, 20); i++) {
     const page = await pdf.getPage(i);

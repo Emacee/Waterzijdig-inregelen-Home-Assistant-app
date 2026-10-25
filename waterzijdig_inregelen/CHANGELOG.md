@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.2
+- Beveiliging: alleen bereikbaar via de ingress-proxy van Home Assistant (andere containers
+  worden geweigerd; X-Forwarded-For wordt niet meer vertrouwd).
+- Beveiliging: pdf.js meegeleverd in plaats van via cdnjs geladen, en PDF's verwerkt met
+  `isEvalSupported: false` (CVE-2024-4367). PDF-upload werkt daardoor ook zonder internet.
+- Beveiliging: Content-Security-Policy en andere beveiligingsheaders, geen `/docs` en
+  `/openapi.json` meer, strengere invoercontrole (ventieltypes, tijdstempels,
+  plattegrondnamen), te grote uploads geweigerd vóór het inlezen.
+- CSV-export: bescherming tegen formule-injectie in Excel; bestandsnamen met niet-ASCII-tekens
+  geven geen fout meer.
+- Sneller herberekenen en tekenen bij veel elementen (opzoeken per id in plaats van zoeken in
+  de hele lijst).
+
 ## 0.1.1
 - Verhuisd naar een eigen repository:
   https://github.com/Emacee/Waterzijdig-inregelen-Home-Assistant-app-

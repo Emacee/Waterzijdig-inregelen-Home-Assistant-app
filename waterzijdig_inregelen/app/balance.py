@@ -228,8 +228,10 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
     valves = {v["id"]: v for v in (project.get("valve_types") or DEFAULT_VALVE_TYPES)}
     tol = max(float(cfg["tolerance_pct"]), 0.0) / 100.0
 
+    emitters = project.get("emitters") or []
+    by_id = {e["id"]: e for e in emitters}
     rows: List[Dict[str, Any]] = []
-    for em in project.get("emitters") or []:
+    for em in emitters:
         is_ufh = em.get("type") == "vloerverwarming"
         n = float(cfg["ufh_exponent"] if is_ufh else cfg["radiator_exponent"])
         nominal = cfg["ufh_nominal"] if is_ufh else cfg["radiator_nominal"]
@@ -293,7 +295,7 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
         r["ratio"] = ratio
         if r.get("flow_act"):
             r["flow_target"] = r["flow_act"] * ratio
-        _advise(r, ratio, tol, valves, project)
+        _advise(r, ratio, tol, valves, by_id[r["id"]])
 
     counts = {k: 0 for k in ("ok", "open", "dicht", "ongeldig", "geen_meting")}
     for r in rows:
@@ -394,8 +396,7 @@ def _pump_text(label: str, need: float, target_dt: Optional[float]) -> Optional[
 
 
 def _advise(r: Dict[str, Any], ratio: float, tol: float,
-            valves: Dict[str, Dict[str, Any]], project: Dict[str, Any]) -> None:
-    em = next(e for e in project["emitters"] if e["id"] == r["id"])
+            valves: Dict[str, Dict[str, Any]], em: Dict[str, Any]) -> None:
     valve = valves.get(em.get("valve_type") or "")
     pct = (ratio - 1) * 100
     if abs(ratio - 1) <= tol:

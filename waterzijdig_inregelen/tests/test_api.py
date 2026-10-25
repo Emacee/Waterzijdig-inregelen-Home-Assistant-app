@@ -1,3 +1,4 @@
+import importlib
 import os
 import sys
 
@@ -18,7 +19,7 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setenv("OPTIONS_FILE", str(tmp_path / "missing.json"))
     sys.modules.pop("app.main", None)
     from fastapi.testclient import TestClient
-    from app import main
+    main = importlib.import_module("app.main")  # vers importeren: leest de omgeving opnieuw
     return TestClient(main.app)
 
 
@@ -66,3 +67,61 @@ def test_rejects_non_images(client):
 def test_bad_ids(client):
     assert client.get("/api/projects/..%2f..%2fetc").status_code == 404
     assert client.get("/api/projects/ZZZ").status_code == 404
+
+
+def test_security_headers_and_no_docs(client):
+    r = client.get("/")
+    assert "script-src 'self'" in r.headers["content-security-policy"]
+    assert r.headers["x-content-type-options"] == "nosniff"
+    for path in ("/docs", "/redoc", "/openapi.json"):
+        assert client.get(path).status_code == 404
+
+
+def test_only_allowed_clients(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("ALLOWED_CLIENTS", "172.30.32.2")
+    sys.modules.pop("app.main", None)
+    from fastapi.testclient import TestClient
+    main = importlib.import_module("app.main")  # vers importeren: leest de omgeving opnieuw
+    assert TestClient(main.app).get("/api/projects").status_code == 403
+    ingress = TestClient(main.app, client=("172.30.32.2", 50000))
+    assert ingress.get("/api/projects").status_code == 200
+    # een vervalste X-Forwarded-For helpt niet
+    assert TestClient(main.app).get("/api/projects",
+                                    headers={"X-Forwarded-For": "172.30.32.2"}).status_code == 403
+    sys.modules.pop("app.main", None)
+
+
+def test_rejects_oversized_body(client):
+    pid = client.post("/api/projects", json={"name": "x"}).json()["project"]["id"]
+    r = client.post(f"/api/projects/{pid}/floorplans", content=b"x",
+                    headers={"Content-Length": str(200 * 1024 * 1024),
+                             "Content-Type": "multipart/form-data; boundary=x"})
+    assert r.status_code == 413
+
+
+def test_csv_formula_injection(client):
+    pid = client.post("/api/projects", json={"name": "Huis ő"}).json()["project"]["id"]
+    eid = client.post(f"/api/projects/{pid}/emitters", json={"name": "=HYPERLINK(1)"}).json()["created_id"]
+    client.put(f"/api/projects/{pid}/emitters/{eid}", json={"room": "@SUM(A1)"})
+    r = client.get(f"/api/projects/{pid}/export.csv")
+    assert "'=HYPERLINK(1)" in r.text and "'@SUM(A1)" in r.text
+    assert "filename*=UTF-8''Huis%20%C5%91.csv" in r.headers["content-disposition"]
+
+
+def test_input_validation(client):
+    pid = client.post("/api/projects", json={"name": "x"}).json()["project"]["id"]
+    bad_valves = [
+        [{"id": "a b", "name": "x", "steps": [[1, 1, ""]]}],               # id met spatie
+        [{"id": "v", "name": "x", "steps": [["<b>", 1, ""]]}],            # stand geen getal
+        [{"id": "v", "name": "x", "steps": [[1, 1, "x" * 50]]}],          # label te lang
+    ]
+    for vt in bad_valves:
+        assert client.put(f"/api/projects/{pid}", json={"valve_types": vt}).status_code == 422
+    ok = [{"id": "eigen_1", "name": "Eigen", "resolution": 1, "steps": [[1, 0.1, ""], [2, 0.3, "N"]]}]
+    assert client.put(f"/api/projects/{pid}", json={"valve_types": ok}).status_code == 200
+
+    eid = client.post(f"/api/projects/{pid}/emitters", json={}).json()["created_id"]
+    r = client.post(f"/api/projects/{pid}/emitters/{eid}/measurements",
+                    json={"t_in": 50, "t_out": 40, "ts": "<script>"})
+    assert r.status_code == 422
