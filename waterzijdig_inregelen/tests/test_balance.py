@@ -170,3 +170,26 @@ def test_floor_heating_is_its_own_group():
     assert all(r[k]["status"] == "ok" for k in r)
     assert {g["key"] for g in res["summary"]["groups"]} == {"rad", "vloer"}
     assert not res["summary"]["pump_advice"]
+
+
+def test_supply_temp_from_project_settings():
+    em = _em("a", None, 50)
+    res = by_id(b.analyze(_project([em], supply_temp=60, target_dt=10)))["a"]
+    assert res["t_in"] == 60 and res["t_in_source"] == "cv" and res["dt"] == 10
+    assert res["status"] == "ok" and res["target_t_out"] == 50
+    g = b.analyze(_project([em], supply_temp=60, target_dt=10))["summary"]["groups"][0]
+    assert g["supply_temp"] == 60 and g["target_t_out"] == 50
+    # een gemeten aanvoer gaat voor
+    res = by_id(b.analyze(_project([_em("a", 55, 50)], supply_temp=60, target_dt=10)))["a"]
+    assert res["t_in"] == 55 and res["t_in_source"] == "gemeten"
+    # zonder cv-temperatuur en zonder aanvoer: ongeldig
+    assert by_id(b.analyze(_project([em])))["a"]["status"] == "ongeldig"
+
+
+def test_ufh_supply_temp_overrides_for_floor_heating():
+    rad = _em("r", None, 50)
+    ufh = _em("v", None, 30, typ="vloerverwarming", valve="flowmeter_lpm")
+    res = by_id(b.analyze(_project([rad, ufh], supply_temp=60, ufh_supply_temp=35)))
+    assert res["r"]["t_in"] == 60 and res["v"]["t_in"] == 35
+    res = by_id(b.analyze(_project([rad, ufh], supply_temp=60)))
+    assert res["v"]["t_in"] == 60

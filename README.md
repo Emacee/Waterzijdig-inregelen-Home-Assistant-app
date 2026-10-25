@@ -23,7 +23,7 @@ berekend. De add-on draait volledig lokaal en opent via de Home Assistant-zijbal
 
 | Add-on | Slug | Versie | Beschrijving |
 |---|---|---|---|
-| [Waterzijdig Inregelen](waterzijdig_inregelen/README.md) | `waterzijdig_inregelen` | 0.1.2 | Plattegronden, radiatoren/vloerverwarming slepen, metingen en per element advies verder open/dicht met nieuwe voorinstelling |
+| [Waterzijdig Inregelen](waterzijdig_inregelen/README.md) | `waterzijdig_inregelen` | 0.1.3 | Plattegronden, radiatoren/vloerverwarming slepen, metingen en per element advies verder open/dicht met nieuwe voorinstelling |
 
 ## Functies
 
@@ -32,6 +32,8 @@ berekend. De add-on draait volledig lokaal en opent via de Home Assistant-zijbal
 - **Plattegronden** in PNG, JPG, GIF, WebP of PDF (één plattegrond per PDF-pagina).
 - **Slepen en neerzetten** van radiatoren, convectoren en vloerverwarmingsgroepen; werkt
   met muis en touchscreen.
+- **Cv-temperatuur** per project: meet alleen de retour, ΔT en beoogde retour volgen uit
+  de ingestelde aanvoertemperatuur en het doel-ΔT.
 - **Metingen** per element of als **meetronde** voor alle elementen tegelijk, met
   volledige meethistorie.
 - **Advies per element** met kleurcodering, debietfactor en nieuwe voorinstelling voor

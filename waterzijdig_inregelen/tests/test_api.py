@@ -125,3 +125,21 @@ def test_input_validation(client):
     r = client.post(f"/api/projects/{pid}/emitters/{eid}/measurements",
                     json={"t_in": 50, "t_out": 40, "ts": "<script>"})
     assert r.status_code == 422
+
+
+def test_measurement_with_cv_temperature(client):
+    pid = client.post("/api/projects", json={"name": "x"}).json()["project"]["id"]
+    eid = client.post(f"/api/projects/{pid}/emitters", json={}).json()["created_id"]
+    url = f"/api/projects/{pid}/emitters/{eid}/measurements"
+    assert client.post(url, json={"t_out": 55}).status_code == 422  # geen cv-temperatuur
+    r = client.put(f"/api/projects/{pid}", json={"settings": {"supply_temp": 70}})
+    assert r.json()["project"]["settings"]["supply_temp"] == 70
+    r = client.post(url, json={"t_out": 50})
+    assert r.status_code == 200
+    a = r.json()["analysis"]["emitters"][0]
+    assert a["t_in"] == 70 and a["dt"] == 20 and a["t_in_source"] == "cv"
+    # leegmaken: weer per element meten; andere instellingen blijven staan
+    r = client.put(f"/api/projects/{pid}", json={"settings": {"supply_temp": None, "target_dt": None}})
+    s = r.json()["project"]["settings"]
+    assert s["supply_temp"] is None and s["target_dt"] == 20.0
+    assert r.json()["analysis"]["emitters"][0]["status"] == "ongeldig"

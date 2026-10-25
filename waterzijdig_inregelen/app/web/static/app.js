@@ -93,6 +93,11 @@ function toast(msg, error = false) {
 
 function result(id) { return S.results.get(id) || {}; }
 function emitter(id) { return S.project.emitters.find((e) => e.id === id); }
+// Ingestelde cv-aanvoertemperatuur voor dit element (vloerverwarming kan een eigen hebben), of null.
+function supplyFor(em) {
+  const s = S.project.settings;
+  return em.type === "vloerverwarming" && s.ufh_supply_temp != null ? s.ufh_supply_temp : s.supply_temp ?? null;
+}
 function valveOf(em) { return S.project.valve_types.find((v) => v.id === em.valve_type); }
 function presetLabel(valve, s) {
   if (s === null || s === undefined) return "–";
@@ -392,6 +397,7 @@ function summaryHtml() {
     .map((k) => `<span class="pill st-${k}"><span class="dot"></span>${c[k]} ${STATUS[k].text.toLowerCase()}</span>`).join("");
   const groups = s.groups.map((g) => `
     <dt>${esc(g.label)}</dt><dd>${g.method === "vraag" ? "op warmtevraag" : `gelijk ΔT, doel ${fmt(g.target_dt, 1)} K`}
+      ${g.supply_temp != null ? `<br>cv ${fmt(g.supply_temp, 0)} °C → doelretour ${fmt(g.target_t_out, 1)} °C` : ""}
       ${g.dt_mean !== undefined ? `<br>gemeten gem. ΔT ${fmt(g.dt_mean, 1)} K${g.dt_weighted !== undefined ? ` (debietgewogen ${fmt(g.dt_weighted, 1)} K)` : ""}` : ""}
       ${g.flow_total !== undefined ? `<br>${fmt(g.flow_total, 0)} l/h · ${fmt(g.q_total / 1000, 1)} kW` : ""}
       <span class="muted">· ${g.measured}/${g.members} gemeten</span></dd>`).join("");
@@ -430,6 +436,7 @@ function emitterPanelHtml(em) {
   const valve = valveOf(em);
   const isUfh = em.type === "vloerverwarming";
   const nom = isUfh ? set.ufh_nominal : set.radiator_nominal;
+  const supply = supplyFor(em);
   const ms = [...(em.measurements || [])].sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
   const canApply = r.preset_advice !== undefined && r.preset_advice !== null &&
     (st === "open" || st === "dicht") && r.preset_advice !== em.preset;
@@ -445,7 +452,7 @@ function emitterPanelHtml(em) {
         ? `<div class="preset">${esc(r.preset_basis_label)} → ${esc(r.preset_advice_label)}</div>` : ""}
       <div>${esc(r.advice || "")}</div>
       ${r.dt !== undefined ? `<dl class="kv" style="margin-top:8px">
-        <dt>Gemeten</dt><dd>${fmt(r.t_in, 1)} → ${fmt(r.t_out, 1)} °C (ΔT ${fmt(r.dt, 1)} K), ruimte ${fmt(r.t_room, 1)} °C</dd>
+        <dt>Gemeten</dt><dd>${fmt(r.t_in, 1)}${r.t_in_source === "cv" ? " (cv)" : ""} → ${fmt(r.t_out, 1)} °C (ΔT ${fmt(r.dt, 1)} K), ruimte ${fmt(r.t_room, 1)} °C</dd>
         ${r.ratio !== undefined ? `<dt>Debietfactor</dt><dd>× ${fmt(r.ratio, 2)}</dd>` : ""}
         ${r.flow_act ? `<dt>Debiet</dt><dd>${fmt(r.flow_act, 0)} → ${fmt(r.flow_target, 0)} l/h</dd>` : ""}
         ${r.q_act ? `<dt>Afgifte</dt><dd>${fmt(r.q_act, 0)} W${r.q_target ? ` → doel ${fmt(r.q_target, 0)} W` : ""}</dd>` : ""}
@@ -458,7 +465,9 @@ function emitterPanelHtml(em) {
 
     <h3>Nieuwe meting</h3>
     <form id="meas" class="grid3" autocomplete="off">
-      <label>Aanvoer °C<input name="t_in" inputmode="decimal" required></label>
+      ${supply !== null
+        ? `<label>Aanvoer °C<input name="t_in" inputmode="decimal" placeholder="cv ${fmt(supply, 0)}" title="Leeg = cv-temperatuur uit de projectinstellingen"></label>`
+        : `<label>Aanvoer °C<input name="t_in" inputmode="decimal" required></label>`}
       <label>Retour °C<input name="t_out" inputmode="decimal" required></label>
       <label>Ruimte °C<input name="t_room" inputmode="decimal" placeholder="${fmt(set.room_temp, 1)}"></label>
       <div style="grid-column:1/-1"><button class="btn primary" style="width:100%">Opslaan &amp; herberekenen</button></div>
@@ -489,10 +498,11 @@ function emitterPanelHtml(em) {
 
     <h3>Meethistorie</h3>
     ${ms.length ? `<table class="history"><thead><tr><th>Wanneer</th><th>Aanv.</th><th>Ret.</th><th>ΔT</th><th>Ruimte</th><th>Stand</th><th></th></tr></thead>
-      <tbody>${ms.map((m) => `<tr><td>${fmtDate(m.ts)}</td><td>${fmt(m.t_in, 1)}</td><td>${fmt(m.t_out, 1)}</td>
-        <td>${fmt(m.t_in - m.t_out, 1)}</td><td>${m.t_room === null || m.t_room === undefined ? "–" : fmt(m.t_room, 1)}</td>
+      <tbody>${ms.map((m) => { const tIn = m.t_in ?? supply; return `<tr><td>${fmtDate(m.ts)}</td>
+        <td>${m.t_in == null ? `<span class="muted" title="cv-temperatuur">cv</span>` : fmt(m.t_in, 1)}</td><td>${fmt(m.t_out, 1)}</td>
+        <td>${tIn == null ? "–" : fmt(tIn - m.t_out, 1)}</td><td>${m.t_room === null || m.t_room === undefined ? "–" : fmt(m.t_room, 1)}</td>
         <td>${esc(presetLabel(valve, m.preset))}</td>
-        <td><button class="x" data-del-m="${m.id}" title="Meting verwijderen">✕</button></td></tr>`).join("")}</tbody></table>`
+        <td><button class="x" data-del-m="${m.id}" title="Meting verwijderen">✕</button></td></tr>`; }).join("")}</tbody></table>`
       : `<p class="muted">Nog geen metingen.</p>`}
 
     <p style="margin-top:24px"><button class="btn danger" id="btn-del">Element verwijderen</button></p>`;
@@ -521,7 +531,8 @@ function bindEmitterPanel(side, em) {
     ev.preventDefault();
     const f = ev.target;
     const t_in = numOrNull(f.t_in.value), t_out = numOrNull(f.t_out.value);
-    if (t_in === null || t_out === null) return toast("Vul aanvoer en retour in", true);
+    if (t_out === null) return toast("Vul de retourtemperatuur in", true);
+    if (t_in === null && supplyFor(em) === null) return toast("Vul de aanvoer in of stel de cv-temperatuur in bij ⚙", true);
     await mutate("POST", `emitters/${em.id}/measurements`,
       { t_in, t_out, t_room: numOrNull(f.t_room.value) });
     toast("Opgeslagen en herberekend");
@@ -559,7 +570,7 @@ function renderTable() {
       rows.push(`<tr data-id="${e.id}">
         <td><b>${esc(e.name)}</b><div class="muted small">${esc(e.room || "")}</div></td>
         <td><input name="preset" inputmode="decimal" value="${e.preset ?? ""}" title="${valve ? esc(valve.name) : "Geen ventieltype"}"></td>
-        <td><input name="t_in" inputmode="decimal" placeholder="${r.t_in ?? ""}"></td>
+        <td><input name="t_in" inputmode="decimal" placeholder="${supplyFor(e) !== null ? `cv ${fmt(supplyFor(e), 0)}` : r.t_in ?? ""}"></td>
         <td><input name="t_out" inputmode="decimal" placeholder="${r.t_out ?? ""}"></td>
         <td><input name="t_room" inputmode="decimal" placeholder="${r.t_room ?? fmt(p.settings.room_temp, 1)}"></td>
         <td class="num">${r.dt !== undefined ? fmt(r.dt, 1) : "–"}</td>
@@ -578,7 +589,7 @@ function renderTable() {
         <button class="btn primary" id="btn-save-round">Meetronde opslaan &amp; herberekenen</button>
         <button class="btn" id="btn-apply-all" ${anyAdvice ? "" : "disabled"}>Alle geadviseerde standen ingesteld</button>
         <span class="muted small">Vul aanvoer/retour in (Enter = volgend veld). Lege regels worden overgeslagen;
-          grijze waarden zijn de laatste meting.</span>
+          grijze waarden zijn de laatste meting${p.settings.supply_temp != null ? "; lege aanvoer = cv-temperatuur" : ""}.</span>
       </div>
       <div class="side" style="width:auto;max-width:none;border:none;padding:0 0 12px;background:none">${summaryHtml()}</div>
       ${rows.length ? `<table class="round"><thead><tr>
@@ -603,8 +614,9 @@ function renderTable() {
     for (const tr of $$(".round tr[data-id]", view)) {
       const t_in = numOrNull($("[name=t_in]", tr).value), t_out = numOrNull($("[name=t_out]", tr).value);
       if (t_in === null && t_out === null) continue;
-      if (t_in === null || t_out === null) {
-        toast(`Vul bij ${emitter(tr.dataset.id).name} zowel aanvoer als retour in`, true);
+      const em = emitter(tr.dataset.id);
+      if (t_out === null || (t_in === null && supplyFor(em) === null)) {
+        toast(`Vul bij ${em.name} ${t_out === null ? "de retour" : "de aanvoer (of de cv-temperatuur bij ⚙)"} in`, true);
         return;
       }
       items.push({ emitter_id: tr.dataset.id, t_in, t_out, t_room: numOrNull($("[name=t_room]", tr).value) });
@@ -790,6 +802,9 @@ async function editSettings() {
       </select></label>
       <label>Doel-ΔT radiatoren (K)<input name="target_dt" inputmode="decimal" value="${s.target_dt}"></label>
       <label>Doel-ΔT vloerverwarming (K)<input name="ufh_target_dt" inputmode="decimal" value="${s.ufh_target_dt}"></label>
+      <label>Cv-temperatuur aanvoer (°C)<input name="supply_temp" inputmode="decimal" value="${s.supply_temp ?? ""}" placeholder="leeg = per element meten"></label>
+      <label>Cv-temperatuur vloerverwarming (°C)<input name="ufh_supply_temp" inputmode="decimal" value="${s.ufh_supply_temp ?? ""}" placeholder="leeg = zelfde als cv"></label>
+      <p class="muted small" id="supply-hint" style="grid-column:1/-1;margin:0"></p>
       <label>Ruimtetemperatuur standaard (°C)<input name="room_temp" inputmode="decimal" value="${s.room_temp}"></label>
       <label>Tolerantie "goed" (± % debiet)<input name="tolerance_pct" inputmode="decimal" value="${s.tolerance_pct}"></label>
     </div>
@@ -824,9 +839,22 @@ async function editSettings() {
         }));
         bindRm();
       };
+      const hint = () => {
+        const v = (n) => numOrNull($(`[name=${n}]`, b).value);
+        const sup = v("supply_temp"), ufh = v("ufh_supply_temp") ?? sup;
+        const parts = [];
+        if (sup !== null && v("target_dt") !== null) parts.push(`radiatoren ${fmt(sup - v("target_dt"), 1)} °C`);
+        if (ufh !== null && v("ufh_target_dt") !== null) parts.push(`vloerverwarming ${fmt(ufh - v("ufh_target_dt"), 1)} °C`);
+        $("#supply-hint", b).textContent = parts.length
+          ? `Beoogde retour (cv-temperatuur − doel-ΔT): ${parts.join(", ")}. Metingen zonder aanvoer gebruiken de cv-temperatuur.`
+          : "Vul de cv-temperatuur in om alleen de retour per element te hoeven meten; ΔT = cv-temperatuur − retour.";
+      };
+      ["supply_temp", "ufh_supply_temp", "target_dt", "ufh_target_dt"].forEach((n) => $(`[name=${n}]`, b).addEventListener("input", hint));
+      hint();
       $("[name=heat_source]", b).onchange = (ev) => {
         const dt = { ketel: 20, warmtepomp: 5 }[ev.target.value];
         if (dt) $("[name=target_dt]", b).value = dt;
+        hint();
       };
       $("#btn-del-project", b).onclick = async () => {
         if (!confirm(`Project '${p.name}' met alle plattegronden en metingen definitief verwijderen?`)) return;
@@ -852,6 +880,7 @@ async function editSettings() {
       settings: {
         heat_source: val("heat_source"), target_dt: numOrNull(val("target_dt")),
         ufh_target_dt: numOrNull(val("ufh_target_dt")),
+        supply_temp: numOrNull(val("supply_temp")), ufh_supply_temp: numOrNull(val("ufh_supply_temp")),
         room_temp: numOrNull(val("room_temp")), tolerance_pct: numOrNull(val("tolerance_pct")),
         method: val("method"), keep_total_flow: $("[name=keep_total_flow]", body).checked,
         radiator_exponent: numOrNull(val("radiator_exponent")), ufh_exponent: numOrNull(val("ufh_exponent")),

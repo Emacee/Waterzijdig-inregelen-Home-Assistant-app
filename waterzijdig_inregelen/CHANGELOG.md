@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3
+- Nieuwe projectinstelling **cv-temperatuur** (aanvoer van cv-ketel of warmtepomp, optioneel
+  apart voor vloerverwarming). Metingen hebben dan alleen de retour nodig: ΔT =
+  cv-temperatuur − retour. De beoogde retour (cv-temperatuur − doel-ΔT) staat in de
+  instellingen en in het overzicht. Een bij het element gemeten aanvoer gaat voor.
+- Een leeggemaakte projectinstelling valt terug op de standaardwaarde.
+
 ## 0.1.2
 - Beveiliging: alleen bereikbaar via de ingress-proxy van Home Assistant (andere containers
   worden geweigerd; X-Forwarded-For wordt niet meer vertrouwd).

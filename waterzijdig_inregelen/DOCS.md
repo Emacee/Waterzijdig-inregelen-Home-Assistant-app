@@ -12,6 +12,12 @@
    * **Ventieltype** en **huidige stand** (voorinstelling, aantal slagen of l/min);
    * optioneel het **vermogen** (W, volgens typeplaatje bij 75/65/20, of voor
      vloerverwarming bij 35/30/20) en de **warmtevraag** van de ruimte (W).
+   **Cv-temperatuur (optioneel):** vul onder ⚙ de aanvoertemperatuur van de cv-ketel of
+   warmtepomp in. Dan hoef je per element alleen de retour te meten: ΔT = cv-temperatuur −
+   retour, en de beoogde retour is cv-temperatuur − doel-ΔT (die staat bij het invullen
+   direct in de instellingen en in het overzicht). Vloerverwarming achter een mengklep kan
+   een eigen cv-temperatuur krijgen. Een aanvoer die je toch bij een element meet, gaat
+   voor. Laat het veld leeg om weer per element te meten.
 4. Laat de installatie een tijd stabiel draaien (thermostaat hoog, thermostatische
    koppen vol open of eraf) en **meet** aanvoer en retour bij elk element, bijvoorbeeld
    met een klem- of infraroodthermometer. Voer de waarden in bij het element of in de
@@ -81,3 +87,6 @@ optioneel een label: `8=0.56:N`.
 |---|---|---|
 | `log_level` | `info` | Hoeveel de add-on logt. |
 | `max_upload_mb` | `25` | Maximale grootte van een plattegrond. |
+
+De cv-temperatuur, doel-ΔT's en ventieltypes zijn instellingen per project (⚙ in het
+project), geen add-on-opties.

@@ -16,6 +16,11 @@ debiet; de verhouding ``r = doel / huidig`` is het advies (r > 1: verder open).
 * **ΔT-methode** (standaard): elk element moet bij zijn eigen aanvoertemperatuur
   het doel-ΔT van het project halen. Het nominale vermogen valt dan weg uit
   ``r`` en dient alleen als weging; zonder vermogen werkt de methode dus ook.
+* **Cv-temperatuur**: is per project de aanvoertemperatuur van de cv-ketel of
+  warmtepomp ingesteld (``supply_temp``, voor vloerverwarming eventueel apart
+  ``ufh_supply_temp``), dan geldt die als aanvoer bij elke meting zonder eigen
+  aanvoertemperatuur. Het ΔT is dan cv-temperatuur min gemeten retour, en de
+  doelretour cv-temperatuur min doel-ΔT.
 * **Warmtevraag-methode**: als bij álle gemeten elementen het vermogen én de
   warmtevraag van de ruimte zijn ingevuld, wordt het huidige totaal geleverde
   vermogen verdeeld naar rato van de warmtevraag.
@@ -45,6 +50,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "target_dt": 20.0,               # radiatoren / convectoren
     "ufh_target_dt": 5.0,            # vloerverwarming (eigen groep)
     "room_temp": 20.0,
+    "supply_temp": None,             # cv-aanvoer [°C]; None = aanvoer per element meten
+    "ufh_supply_temp": None,         # idem vloerverwarming; None = gelijk aan supply_temp
     "tolerance_pct": 10.0,
     "keep_total_flow": True,
     "method": "auto",                # auto | dt
@@ -216,6 +223,13 @@ def _num(v: Any) -> Optional[float]:
     return f if math.isfinite(f) else None
 
 
+def supply_temp_for(cfg: Dict[str, Any], is_ufh: bool) -> Optional[float]:
+    """Ingestelde cv-aanvoertemperatuur voor deze groep, of None."""
+    if is_ufh and _num(cfg.get("ufh_supply_temp")) is not None:
+        return _num(cfg["ufh_supply_temp"])
+    return _num(cfg.get("supply_temp"))
+
+
 def latest_measurement(emitter: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     ms = emitter.get("measurements") or []
     if not ms:
@@ -247,13 +261,21 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
             row["advice"] = "Nog geen meting"
             continue
         t_in, t_out = _num(m.get("t_in")), _num(m.get("t_out"))
+        t_in_source = "gemeten"
+        if t_in is None:
+            t_in, t_in_source = supply_temp_for(cfg, is_ufh), "cv"
         t_room = _num(m.get("t_room"))
         if t_room is None:
             t_room = float(cfg["room_temp"])
-        row.update(t_in=t_in, t_out=t_out, t_room=t_room, measured_at=m.get("ts"),
-                   preset_measured=_num(m.get("preset")))
-        if t_in is None or t_out is None:
-            row.update(status="ongeldig", advice="Aanvoer- en retourtemperatuur nodig")
+        row.update(t_in=t_in, t_in_source=t_in_source, t_out=t_out, t_room=t_room,
+                   measured_at=m.get("ts"), preset_measured=_num(m.get("preset")))
+        if t_out is None:
+            row.update(status="ongeldig", advice="Retourtemperatuur nodig")
+            continue
+        if t_in is None:
+            row.update(status="ongeldig",
+                       advice="Aanvoertemperatuur nodig: meet die bij het element of stel de "
+                              "cv-temperatuur in bij de projectinstellingen")
             continue
         dt = t_in - t_out
         row["dt"] = round(dt, 2)
@@ -318,7 +340,10 @@ def _distribute(key: str, label: str, members: List[Dict[str, Any]], cfg: Dict[s
     """Bepaal ratio_raw en de normalisatiefactor voor één groep (één watercircuit)."""
     measured = [r for r in members if r["status"] == "gemeten"]
     target_dt = max(float(cfg["ufh_target_dt"] if key == "vloer" else cfg["target_dt"]), 0.5)
+    supply = supply_temp_for(cfg, key == "vloer")
     g: Dict[str, Any] = {"key": key, "label": label, "target_dt": target_dt,
+                         "supply_temp": supply,
+                         "target_t_out": supply - target_dt if supply is not None else None,
                          "members": len(members), "measured": len(measured), "method": "dt"}
     if not measured:
         return g
