@@ -41,6 +41,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 CP_WH_PER_L_K = 1.163  # warmtecapaciteit water [Wh/(l·K)]
 MIN_DT = 0.3           # kleiner gemeten ΔT is niet bruikbaar
 RATIO_CAP = 4.0        # meer dan 4x debiet is in de praktijk "volledig open"
+BOILER_MAX_DT = 20.0   # groter ΔT over een cv-ketel kan een storing geven
+DT20_MIN_SUPPLY = 60.0  # ΔT 20 K lukt bij radiatoren meestal pas vanaf ~60 °C aanvoer
 
 # Elke groep is een eigen watercircuit met eigen doel-ΔT en pompadvies.
 GROUPS = [("rad", "Radiatoren"), ("vloer", "Vloerverwarming")]
@@ -324,7 +326,8 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
         counts[r["status"]] = counts.get(r["status"], 0) + 1
     methods = {g["method"] for g in groups if g["measured"]}
     summary = {"counts": counts, "notes": notes, "total": len(rows), "groups": groups,
-               "pump_advice": [g["pump_advice"] for g in groups if g.get("pump_advice")]}
+               "pump_advice": [g["pump_advice"] for g in groups if g.get("pump_advice")],
+               "boiler": _boiler(project, cfg)}
     for r in rows:
         for k in ("_lm_m", "_dt_eff", "_group", "_scale", "nominal", "n"):
             r.pop(k, None)
@@ -333,6 +336,25 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
                 r[k] = round(v, 3)
     return {"method": "vraag" if methods == {"vraag"} else "dt", "summary": summary,
             "emitters": rows}
+
+
+def _boiler(project: Dict[str, Any], cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Laatste meting van aanvoer/retour bij de warmtebron zelf."""
+    ms = project.get("boiler") or []
+    if not ms:
+        return None
+    m = max(ms, key=lambda m: m.get("ts") or "")
+    t_in, t_out = _num(m.get("t_in")), _num(m.get("t_out"))
+    out: Dict[str, Any] = {"id": m.get("id"), "ts": m.get("ts"), "t_in": t_in, "t_out": t_out}
+    if t_in is None or t_out is None:
+        return out
+    out["dt"] = round(t_in - t_out, 2)
+    if cfg["heat_source"] == "ketel" and out["dt"] > BOILER_MAX_DT:
+        dt_txt = f"{out['dt']:.1f}".replace(".", ",")
+        out["warning"] = (f"ΔT over de ketel is {dt_txt} K: houd die op maximaal "
+                          f"{BOILER_MAX_DT:g} K, anders kan de ketel in storing gaan. Zet de pomp "
+                          "hoger of de radiatoren met de grootste ΔT verder open.")
+    return out
 
 
 def _distribute(key: str, label: str, members: List[Dict[str, Any]], cfg: Dict[str, Any],
@@ -396,6 +418,11 @@ def _distribute(key: str, label: str, members: List[Dict[str, Any]], cfg: Dict[s
 
     flows = [r for r in measured if r.get("flow_act")]
     g["dt_mean"] = round(sum(r["dt"] for r in measured) / len(measured), 2)
+    t_in_mean = sum(r["t_in"] for r in measured) / len(measured)
+    if key == "rad" and target_dt >= 18 and t_in_mean < DT20_MIN_SUPPLY:
+        notes.append(f"{label}: de aanvoer is gemiddeld {t_in_mean:.0f} °C. Een ΔT van "
+                     f"{target_dt:g} K lukt meestal pas vanaf ~{DT20_MIN_SUPPLY:.0f} °C aanvoer; "
+                     "overweeg een doel-ΔT van 15 K (⚙).")
     if flows:
         tot = sum(r["flow_act"] for r in flows)
         g["flow_total"] = round(tot, 1)

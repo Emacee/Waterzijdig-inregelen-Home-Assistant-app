@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+- Meetronde: aanvoer en retour **bij de warmtebron** in te vullen; bij een cv-ketel volgt
+  een waarschuwing als het ΔT daar boven de 20 K komt (kans op storing). Staat ook in het
+  overzicht en de CSV-export.
+- Hint om het doel-ΔT op 15 K te zetten als de radiatoren gemiddeld minder dan ~60 °C
+  aanvoer krijgen terwijl het doel-ΔT 18 K of meer is.
+
 ## 0.2.0
 - Leidingverloop intekenen op de plattegronden (aftakkingen snappen op bestaande leidingen).
 - Nieuw tabblad **Schema**: hydraulisch schema op basis van plattegronden en leidingverloop,

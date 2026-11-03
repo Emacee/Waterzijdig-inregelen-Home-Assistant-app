@@ -175,3 +175,14 @@ def test_pipes_and_components(client):
     r = client.delete(f"/api/projects/{pid}/floorplans/{fid}")
     assert r.json()["project"]["components"][0]["attach"] == "main"
     assert client.delete(f"/api/projects/{pid}/components/{cid}").json()["project"]["components"][0]["type"] == "boilervat"
+
+
+def test_boiler_measurement_in_round(client):
+    pid = client.post("/api/projects", json={"name": "Huis"}).json()["project"]["id"]
+    assert client.post(f"/api/projects/{pid}/measurements", json={"items": []}).status_code == 422
+    r = client.post(f"/api/projects/{pid}/measurements",
+                    json={"items": [], "boiler": {"t_in": 70.8, "t_out": 49.8}})
+    assert r.status_code == 200
+    boiler = r.json()["analysis"]["summary"]["boiler"]
+    assert boiler["dt"] == 21.0 and boiler["warning"]
+    assert "Warmtebron" in client.get(f"/api/projects/{pid}/export.csv").text

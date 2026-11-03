@@ -21,7 +21,11 @@
 4. Laat de installatie een tijd stabiel draaien (thermostaat hoog, thermostatische
    koppen vol open of eraf) en **meet** aanvoer en retour bij elk element, bijvoorbeeld
    met een klem- of infraroodthermometer. Voer de waarden in bij het element of in de
-   **Meetronde**-tabel (Enter springt naar het volgende veld).
+   **Meetronde**-tabel (Enter springt naar het volgende veld). Meet niet te lang over
+   een ronde: slaat de ketel tussendoor af, dan kloppen de laatste metingen niet meer.
+   Bovenaan de meetronde kun je ook aanvoer en retour **bij de warmtebron zelf** invullen.
+   Bij een cv-ketel waarschuwt de app als het ΔT daar boven de 20 K komt: dan kan de ketel
+   in storing gaan.
 5. Pas de ventielen aan volgens het advies en klik **Stand … ingesteld** (of in de
    meetronde **Alle geadviseerde standen ingesteld**). Elementen waarvan de stand na de
    laatste meting is veranderd krijgen een gestippelde rand en *meten*: doe na een tijdje
@@ -76,6 +80,10 @@ bepaald; de verhouding *doel / huidig* is de **debietfactor** (> 1 = verder open
   geschaald.
 * **Groepen**: radiatoren/convectoren en vloerverwarming worden als aparte circuits
   ingeregeld, elk met een eigen doel-ΔT en pompadvies.
+* **Doel-ΔT en aanvoertemperatuur**: een ΔT van 15–20 K over de radiatoren is ideaal, maar
+  20 K lukt meestal pas vanaf zo'n 60 °C aanvoer. Is de gemeten aanvoer van de radiatoren
+  gemiddeld lager terwijl het doel-ΔT 18 K of meer is, dan stelt de app voor het doel-ΔT
+  op 15 K te zetten.
 * **Nieuwe stand**: bij een ongeveer gelijk drukverschil over het ventiel is het debiet
   evenredig met de kv-waarde, dus `kv_nieuw = kv_huidig · factor`, terugvertaald naar een
   stand via de kv-tabel van het ventieltype en afgerond op de stapgrootte.

@@ -83,6 +83,7 @@ class Store:
         p.setdefault("floorplans", [])
         p.setdefault("emitters", [])
         p.setdefault("components", [])
+        p.setdefault("boiler", [])
         for fp in p["floorplans"]:
             fp.setdefault("pipes", [])
         return p
