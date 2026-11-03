@@ -551,7 +551,9 @@ function summaryHtml() {
   return `
     <h3 style="margin-top:0">Overzicht</h3>
     <div class="summary">${pills || '<span class="muted">Nog geen elementen</span>'}</div>
-    ${groups ? `<dl class="kv">${groups}</dl>` : ""}
+    ${groups || s.boiler ? `<dl class="kv">${groups}${s.boiler ? `<dt>Warmtebron</dt><dd>${fmt(s.boiler.t_in, 1)} → ${fmt(s.boiler.t_out, 1)} °C
+      (ΔT ${fmt(s.boiler.dt, 1)} K) <span class="muted">· ${fmtDate(s.boiler.ts)}</span></dd>` : ""}</dl>` : ""}
+    ${s.boiler?.warning ? `<div class="notice warn">${esc(s.boiler.warning)}</div>` : ""}
     ${s.pump_advice.map((t) => `<div class="notice warn">${esc(t)}</div>`).join("")}
     ${s.notes.map((n) => `<div class="notice">${esc(n)}</div>`).join("")}`;
 }
@@ -713,7 +715,19 @@ function bindEmitterPanel(side, em) {
 
 function renderTable() {
   const p = S.project, view = $("#view");
-  const rows = [];
+  const rows = [], b = S.analysis.summary.boiler || {};
+  rows.push(`<tr class="group"><td colspan="9">Warmtebron</td></tr>
+    <tr data-id="boiler">
+      <td><b>${esc({ ketel: "Cv-ketel", warmtepomp: "Warmtepomp" }[p.settings.heat_source] || "Warmtebron")}</b>
+        <div class="muted small">aanvoer/retour bij de bron zelf (optioneel)</div></td>
+      <td></td>
+      <td><input name="t_in" inputmode="decimal" placeholder="${b.t_in ?? ""}"></td>
+      <td><input name="t_out" inputmode="decimal" placeholder="${b.t_out ?? ""}"></td>
+      <td><input name="t_room" type="hidden"></td>
+      <td class="num">${b.dt !== undefined ? fmt(b.dt, 1) : "–"}</td><td></td><td></td>
+      <td><div class="status ${b.warning ? "st-open" : b.dt !== undefined ? "st-ok" : "st-geen_meting"}"><span class="dot"></span>
+        <span>${b.warning ? esc(b.warning) : b.dt !== undefined ? "ΔT bij de bron binnen de grens" : ""}</span></div></td>
+    </tr>`);
   for (const fp of p.floorplans) {
     const ems = p.emitters.filter((e) => e.floorplan_id === fp.id);
     if (!ems.length) continue;
@@ -751,7 +765,7 @@ function renderTable() {
         <tbody>${rows.join("")}</tbody></table>`
       : `<p class="muted">Nog geen elementen. Plaats ze eerst op de plattegrond.</p>`}
     </div>`;
-  const inputs = $$(".round input", view);
+  const inputs = $$(".round input:not([type=hidden])", view);
   inputs.forEach((inp, i) => inp.addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") { ev.preventDefault(); (inputs[i + 1] || $("#btn-save-round")).focus(); }
   }));
@@ -764,7 +778,15 @@ function renderTable() {
   }));
   $("#btn-save-round").onclick = async () => {
     const items = [];
+    let boiler;
     for (const tr of $$(".round tr[data-id]", view)) {
+      if (tr.dataset.id === "boiler") {
+        const t_in = numOrNull($("[name=t_in]", tr).value), t_out = numOrNull($("[name=t_out]", tr).value);
+        if (t_in === null && t_out === null) continue;
+        if (t_in === null || t_out === null) return toast("Vul bij de warmtebron zowel aanvoer als retour in", true);
+        boiler = { t_in, t_out };
+        continue;
+      }
       const t_in = numOrNull($("[name=t_in]", tr).value), t_out = numOrNull($("[name=t_out]", tr).value);
       if (t_in === null && t_out === null) continue;
       const em = emitter(tr.dataset.id);
@@ -774,9 +796,9 @@ function renderTable() {
       }
       items.push({ emitter_id: tr.dataset.id, t_in, t_out, t_room: numOrNull($("[name=t_room]", tr).value) });
     }
-    if (!items.length) return toast("Geen nieuwe waarden ingevuld", true);
-    await mutate("POST", "measurements", { items });
-    toast(`${items.length} meting(en) opgeslagen en herberekend`);
+    if (!items.length && !boiler) return toast("Geen nieuwe waarden ingevuld", true);
+    await mutate("POST", "measurements", { items, boiler });
+    toast(`${items.length + (boiler ? 1 : 0)} meting(en) opgeslagen en herberekend`);
   };
   $("#btn-apply-all").onclick = async () => {
     const todo = S.analysis.emitters.filter((r) => (r.status === "open" || r.status === "dicht") &&

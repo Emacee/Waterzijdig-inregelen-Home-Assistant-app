@@ -180,8 +180,14 @@ class BatchItem(MeasurementIn):
     emitter_id: str
 
 
+class BoilerIn(_M):
+    t_in: float = Field(..., ge=-10, le=110)
+    t_out: float = Field(..., ge=-10, le=110)
+
+
 class Batch(_M):
-    items: List[BatchItem] = Field(..., max_length=500)
+    items: List[BatchItem] = Field([], max_length=500)
+    boiler: Optional[BoilerIn] = None  # aanvoer/retour bij de warmtebron zelf
 
 
 class FloorplanUpdate(_M):
@@ -247,7 +253,8 @@ async def delete_project(pid: str):
 @app.get("/api/projects/{pid}/export.csv")
 async def export_csv(pid: str):
     p = store.get(pid)
-    a = {r["id"]: r for r in analyze(p)["emitters"]}
+    analysis = analyze(p)
+    a = {r["id"]: r for r in analysis["emitters"]}
     fps = {f["id"]: f["name"] for f in p["floorplans"]}
     buf = io.StringIO()
     w = csv.writer(buf, delimiter=";")
@@ -263,6 +270,10 @@ async def export_csv(pid: str):
                     r.get("t_room", ""), r.get("dt", ""), _r(r.get("flow_act")),
                     _r(r.get("flow_target")), _r(r.get("ratio"), 2),
                     r.get("preset_advice_label", ""), r.get("advice", "")]))
+    b = analysis["summary"]["boiler"]
+    if b:
+        w.writerow(["", "", "Warmtebron", p["settings"].get("heat_source", ""), "", "", "", "", b.get("ts", ""), b.get("t_in", ""),
+                    b.get("t_out", ""), "", b.get("dt", ""), "", "", "", "", b.get("warning", "")])
     name = "".join(c for c in p["name"] if c.isalnum() or c in " -_").strip() or "project"
     ascii_name = name.encode("ascii", "ignore").decode().strip() or "project"
     return Response("﻿" + buf.getvalue(), media_type="text/csv; charset=utf-8",
@@ -503,6 +514,11 @@ async def add_measurements(pid: str, body: Batch):
     for it in body.items:
         it.ts = it.ts or ts
         _add_measurement(p, find(p["emitters"], it.emitter_id), it)
+    if body.boiler:
+        p["boiler"].append({"id": new_id(), "ts": ts, "t_in": body.boiler.t_in,
+                            "t_out": body.boiler.t_out})
+    if not body.items and not body.boiler:
+        raise HTTPException(422, "Geen metingen")
     return _out(store.save(p))
 
 

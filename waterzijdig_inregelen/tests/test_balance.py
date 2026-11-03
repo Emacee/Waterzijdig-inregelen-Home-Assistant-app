@@ -193,3 +193,26 @@ def test_ufh_supply_temp_overrides_for_floor_heating():
     assert res["r"]["t_in"] == 60 and res["v"]["t_in"] == 35
     res = by_id(b.analyze(_project([rad, ufh], supply_temp=60)))
     assert res["v"]["t_in"] == 60
+
+
+def test_boiler_dt_warning_for_ketel():
+    p = _project([], heat_source="ketel")
+    p["boiler"] = [{"id": "b", "ts": "2026-01-01T00:00:00", "t_in": 70.8, "t_out": 49.8}]
+    boiler = b.analyze(p)["summary"]["boiler"]
+    assert boiler["dt"] == 21.0 and "storing" in boiler["warning"]
+    p["boiler"].append({"id": "c", "ts": "2026-01-02T00:00:00", "t_in": 70, "t_out": 52})
+    boiler = b.analyze(p)["summary"]["boiler"]
+    assert boiler["dt"] == 18.0 and "warning" not in boiler  # laatste meting telt
+    p["settings"]["heat_source"] = "warmtepomp"
+    p["boiler"] = p["boiler"][:1]
+    assert "warning" not in b.analyze(p)["summary"]["boiler"]
+    assert b.analyze(_project([]))["summary"]["boiler"] is None
+
+
+def test_low_supply_hint_for_dt20():
+    low = [_em("a", 55, 40), _em("b", 56, 38)]
+    notes = b.analyze(_project(low, target_dt=20))["summary"]["notes"]
+    assert any("15 K" in n for n in notes)
+    assert not any("15 K" in n for n in b.analyze(_project(low, target_dt=15))["summary"]["notes"])
+    high = [_em("a", 70, 52), _em("b", 68, 50)]
+    assert not any("15 K" in n for n in b.analyze(_project(high, target_dt=20))["summary"]["notes"])
