@@ -17,6 +17,6 @@ RUN chmod a+x /run.sh
 
 COPY app /app/app
 
-# Ingress: the app listens on 8099 (see config.yaml ingress_port). No host port is
+# Ingress: the app listens on 8099 (the default ingress_port). No host port is
 # published. s6-overlay (from the base image) is PID 1 and runs CMD.
 CMD [ "/run.sh" ]

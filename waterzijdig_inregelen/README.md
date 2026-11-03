@@ -22,6 +22,8 @@ nodig heeft bij een zo laag mogelijke aanvoertemperatuur.
   pagina's wordt één plattegrond per verdieping/pagina).
 - **Slepen en neerzetten** — zet radiatoren, convectoren en vloerverwarmingsgroepen op de
   plattegrond en verplaats ze wanneer je wilt; werkt met muis en touchscreen.
+- **Cv-temperatuur** — stel per project de aanvoertemperatuur van de cv-ketel of
+  warmtepomp in en meet alleen de retour; ΔT en beoogde retour volgen uit het doel-ΔT.
 - **Metingen** — per element of als **meetronde** voor alle elementen tegelijk in één
   tabel. De volledige meethistorie wordt bewaard, met de ventielstand van dat moment.
 - **Advies per element** — kleurcodering op de plattegrond (groen goed, oranje verder

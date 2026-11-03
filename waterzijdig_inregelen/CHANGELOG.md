@@ -1,16 +1,31 @@
 # Changelog
 
-## 0.3.0
+## 0.2.0
 - Leidingverloop intekenen op de plattegronden (aftakkingen snappen op bestaande leidingen).
 - Nieuw tabblad **Schema**: hydraulisch schema op basis van plattegronden en leidingverloop,
   met verdiepingen, aftakkingen, vloerverwarmingsverdeler en het advies per element.
 - Componenten toe te voegen aan het schema: secundaire pomp, boilervat, buffervat,
   thermostaat en mengklep. Schema te downloaden als SVG.
 
-## 0.2.0
-- Nieuwe projectinstelling **cv-aanvoertemperatuur** (plus optioneel een eigen
-  aanvoertemperatuur voor vloerverwarming). Metingen zonder aanvoer rekenen het ΔT vanaf
-  deze temperatuur, zodat per element alleen de retour gemeten hoeft te worden.
+## 0.1.3
+- Nieuwe projectinstelling **cv-temperatuur** (aanvoer van cv-ketel of warmtepomp, optioneel
+  apart voor vloerverwarming). Metingen hebben dan alleen de retour nodig: ΔT =
+  cv-temperatuur − retour. De beoogde retour (cv-temperatuur − doel-ΔT) staat in de
+  instellingen en in het overzicht. Een bij het element gemeten aanvoer gaat voor.
+- Een leeggemaakte projectinstelling valt terug op de standaardwaarde.
+
+## 0.1.2
+- Beveiliging: alleen bereikbaar via de ingress-proxy van Home Assistant (andere containers
+  worden geweigerd; X-Forwarded-For wordt niet meer vertrouwd).
+- Beveiliging: pdf.js meegeleverd in plaats van via cdnjs geladen, en PDF's verwerkt met
+  `isEvalSupported: false` (CVE-2024-4367). PDF-upload werkt daardoor ook zonder internet.
+- Beveiliging: Content-Security-Policy en andere beveiligingsheaders, geen `/docs` en
+  `/openapi.json` meer, strengere invoercontrole (ventieltypes, tijdstempels,
+  plattegrondnamen), te grote uploads geweigerd vóór het inlezen.
+- CSV-export: bescherming tegen formule-injectie in Excel; bestandsnamen met niet-ASCII-tekens
+  geven geen fout meer.
+- Sneller herberekenen en tekenen bij veel elementen (opzoeken per id in plaats van zoeken in
+  de hele lijst).
 
 ## 0.1.1
 - Verhuisd naar een eigen repository:

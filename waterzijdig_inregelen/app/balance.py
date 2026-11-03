@@ -16,10 +16,11 @@ debiet; de verhouding ``r = doel / huidig`` is het advies (r > 1: verder open).
 * **ΔT-methode** (standaard): elk element moet bij zijn eigen aanvoertemperatuur
   het doel-ΔT van het project halen. Het nominale vermogen valt dan weg uit
   ``r`` en dient alleen als weging; zonder vermogen werkt de methode dus ook.
-* **Cv-aanvoertemperatuur**: per project kan één aanvoertemperatuur worden
-  ingesteld (en eventueel een eigen voor de vloerverwarming). Metingen zonder
-  aanvoertemperatuur rekenen daarmee, zodat alleen de retour per element gemeten
-  hoeft te worden; ΔT = cv-aanvoer − retour.
+* **Cv-temperatuur**: is per project de aanvoertemperatuur van de cv-ketel of
+  warmtepomp ingesteld (``supply_temp``, voor vloerverwarming eventueel apart
+  ``ufh_supply_temp``), dan geldt die als aanvoer bij elke meting zonder eigen
+  aanvoertemperatuur. Het ΔT is dan cv-temperatuur min gemeten retour, en de
+  doelretour cv-temperatuur min doel-ΔT.
 * **Warmtevraag-methode**: als bij álle gemeten elementen het vermogen én de
   warmtevraag van de ruimte zijn ingevuld, wordt het huidige totaal geleverde
   vermogen verdeeld naar rato van de warmtevraag.
@@ -49,8 +50,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "target_dt": 20.0,               # radiatoren / convectoren
     "ufh_target_dt": 5.0,            # vloerverwarming (eigen groep)
     "room_temp": 20.0,
-    "supply_temp": None,             # cv-aanvoertemperatuur; None = per meting invullen
-    "ufh_supply_temp": None,         # eigen aanvoer vloerverwarming; None = supply_temp
+    "supply_temp": None,             # cv-aanvoer [°C]; None = aanvoer per element meten
+    "ufh_supply_temp": None,         # idem vloerverwarming; None = gelijk aan supply_temp
     "tolerance_pct": 10.0,
     "keep_total_flow": True,
     "method": "auto",                # auto | dt
@@ -222,10 +223,11 @@ def _num(v: Any) -> Optional[float]:
     return f if math.isfinite(f) else None
 
 
-def supply_temp(cfg: Dict[str, Any], is_ufh: bool) -> Optional[float]:
-    """Ingestelde aanvoertemperatuur voor deze groep (None als niet ingesteld)."""
-    t = _num(cfg.get("ufh_supply_temp")) if is_ufh else None
-    return t if t is not None else _num(cfg.get("supply_temp"))
+def supply_temp_for(cfg: Dict[str, Any], is_ufh: bool) -> Optional[float]:
+    """Ingestelde cv-aanvoertemperatuur voor deze groep, of None."""
+    if is_ufh and _num(cfg.get("ufh_supply_temp")) is not None:
+        return _num(cfg["ufh_supply_temp"])
+    return _num(cfg.get("supply_temp"))
 
 
 def latest_measurement(emitter: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -240,8 +242,10 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
     valves = {v["id"]: v for v in (project.get("valve_types") or DEFAULT_VALVE_TYPES)}
     tol = max(float(cfg["tolerance_pct"]), 0.0) / 100.0
 
+    emitters = project.get("emitters") or []
+    by_id = {e["id"]: e for e in emitters}
     rows: List[Dict[str, Any]] = []
-    for em in project.get("emitters") or []:
+    for em in emitters:
         is_ufh = em.get("type") == "vloerverwarming"
         n = float(cfg["ufh_exponent"] if is_ufh else cfg["radiator_exponent"])
         nominal = cfg["ufh_nominal"] if is_ufh else cfg["radiator_nominal"]
@@ -257,18 +261,21 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
             row["advice"] = "Nog geen meting"
             continue
         t_in, t_out = _num(m.get("t_in")), _num(m.get("t_out"))
+        t_in_source = "gemeten"
         if t_in is None:
-            t_in = supply_temp(cfg, is_ufh)
-            if t_in is not None:
-                row["t_in_source"] = "cv"
+            t_in, t_in_source = supply_temp_for(cfg, is_ufh), "cv"
         t_room = _num(m.get("t_room"))
         if t_room is None:
             t_room = float(cfg["room_temp"])
-        row.update(t_in=t_in, t_out=t_out, t_room=t_room, measured_at=m.get("ts"),
-                   preset_measured=_num(m.get("preset")))
-        if t_in is None or t_out is None:
-            row.update(status="ongeldig", advice="Aanvoer- en retourtemperatuur nodig "
-                                                 "(of stel de cv-aanvoertemperatuur in)")
+        row.update(t_in=t_in, t_in_source=t_in_source, t_out=t_out, t_room=t_room,
+                   measured_at=m.get("ts"), preset_measured=_num(m.get("preset")))
+        if t_out is None:
+            row.update(status="ongeldig", advice="Retourtemperatuur nodig")
+            continue
+        if t_in is None:
+            row.update(status="ongeldig",
+                       advice="Aanvoertemperatuur nodig: meet die bij het element of stel de "
+                              "cv-temperatuur in bij de projectinstellingen")
             continue
         dt = t_in - t_out
         row["dt"] = round(dt, 2)
@@ -310,7 +317,7 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
         r["ratio"] = ratio
         if r.get("flow_act"):
             r["flow_target"] = r["flow_act"] * ratio
-        _advise(r, ratio, tol, valves, project)
+        _advise(r, ratio, tol, valves, by_id[r["id"]])
 
     counts = {k: 0 for k in ("ok", "open", "dicht", "ongeldig", "geen_meting")}
     for r in rows:
@@ -333,7 +340,10 @@ def _distribute(key: str, label: str, members: List[Dict[str, Any]], cfg: Dict[s
     """Bepaal ratio_raw en de normalisatiefactor voor één groep (één watercircuit)."""
     measured = [r for r in members if r["status"] == "gemeten"]
     target_dt = max(float(cfg["ufh_target_dt"] if key == "vloer" else cfg["target_dt"]), 0.5)
+    supply = supply_temp_for(cfg, key == "vloer")
     g: Dict[str, Any] = {"key": key, "label": label, "target_dt": target_dt,
+                         "supply_temp": supply,
+                         "target_t_out": supply - target_dt if supply is not None else None,
                          "members": len(members), "measured": len(measured), "method": "dt"}
     if not measured:
         return g
@@ -411,8 +421,7 @@ def _pump_text(label: str, need: float, target_dt: Optional[float]) -> Optional[
 
 
 def _advise(r: Dict[str, Any], ratio: float, tol: float,
-            valves: Dict[str, Dict[str, Any]], project: Dict[str, Any]) -> None:
-    em = next(e for e in project["emitters"] if e["id"] == r["id"])
+            valves: Dict[str, Dict[str, Any]], em: Dict[str, Any]) -> None:
     valve = valves.get(em.get("valve_type") or "")
     pct = (ratio - 1) * 100
     if abs(ratio - 1) <= tol:

@@ -3,11 +3,12 @@
 "use strict";
 
 const S = {
-  projects: [], project: null, analysis: null,
+  projects: [], project: null, analysis: null, results: new Map(),
   fpId: null, selectedId: null, mode: "plan", zoom: 1, compact: false,
   pipeId: null, draw: null, schema: null, schemaZoom: 1,
 };
-const PDFJS = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/";
+// pdf.js 3.11.174 (Apache-2.0) wordt met de add-on meegeleverd: werkt offline en zonder CDN.
+const PDFJS = "static/pdfjs/";
 
 const $ = (sel, el = document) => el.querySelector(sel);
 const $$ = (sel, el = document) => [...el.querySelectorAll(sel)];
@@ -41,13 +42,6 @@ const TYPES = {
   convector: { label: "Convector", icon: "C" },
 };
 
-// Ingestelde cv-aanvoertemperatuur voor dit element (null = per meting invullen).
-const cvSupply = (em) => {
-  const set = S.project.settings;
-  const ufh = em.type === "vloerverwarming" ? set.ufh_supply_temp : null;
-  return ufh ?? set.supply_temp ?? null;
-};
-
 // ---- API ------------------------------------------------------------------
 
 async function api(method, path, body) {
@@ -72,6 +66,7 @@ function setProject(data) {
   S.project = data.project;
   S.analysis = data.analysis;
   S.schema = data.schema;
+  S.results = new Map(data.analysis.emitters.map((r) => [r.id, r]));
   if (!S.project.floorplans.some((f) => f.id === S.fpId)) S.fpId = S.project.floorplans[0]?.id || null;
   if (S.selectedId && !S.project.emitters.some((e) => e.id === S.selectedId)) S.selectedId = null;
   if (S.pipeId && !curPipes().some((l) => l.id === S.pipeId)) S.pipeId = null;
@@ -103,8 +98,13 @@ function toast(msg, error = false) {
   toast._t = setTimeout(() => (t.hidden = true), error ? 5000 : 2200);
 }
 
-function result(id) { return S.analysis?.emitters.find((r) => r.id === id) || {}; }
+function result(id) { return S.results.get(id) || {}; }
 function emitter(id) { return S.project.emitters.find((e) => e.id === id); }
+// Ingestelde cv-aanvoertemperatuur voor dit element (vloerverwarming kan een eigen hebben), of null.
+function supplyFor(em) {
+  const s = S.project.settings;
+  return em.type === "vloerverwarming" && s.ufh_supply_temp != null ? s.ufh_supply_temp : s.supply_temp ?? null;
+}
 function valveOf(em) { return S.project.valve_types.find((v) => v.id === em.valve_type); }
 function presetLabel(valve, s) {
   if (s === null || s === undefined) return "–";
@@ -544,6 +544,7 @@ function summaryHtml() {
     .map((k) => `<span class="pill st-${k}"><span class="dot"></span>${c[k]} ${STATUS[k].text.toLowerCase()}</span>`).join("");
   const groups = s.groups.map((g) => `
     <dt>${esc(g.label)}</dt><dd>${g.method === "vraag" ? "op warmtevraag" : `gelijk ΔT, doel ${fmt(g.target_dt, 1)} K`}
+      ${g.supply_temp != null ? `<br>cv ${fmt(g.supply_temp, 0)} °C → doelretour ${fmt(g.target_t_out, 1)} °C` : ""}
       ${g.dt_mean !== undefined ? `<br>gemeten gem. ΔT ${fmt(g.dt_mean, 1)} K${g.dt_weighted !== undefined ? ` (debietgewogen ${fmt(g.dt_weighted, 1)} K)` : ""}` : ""}
       ${g.flow_total !== undefined ? `<br>${fmt(g.flow_total, 0)} l/h · ${fmt(g.q_total / 1000, 1)} kW` : ""}
       <span class="muted">· ${g.measured}/${g.members} gemeten</span></dd>`).join("");
@@ -588,7 +589,7 @@ function emitterPanelHtml(em) {
   const valve = valveOf(em);
   const isUfh = em.type === "vloerverwarming";
   const nom = isUfh ? set.ufh_nominal : set.radiator_nominal;
-  const cv = cvSupply(em);
+  const supply = supplyFor(em);
   const ms = [...(em.measurements || [])].sort((a, b) => (b.ts || "").localeCompare(a.ts || ""));
   const canApply = r.preset_advice !== undefined && r.preset_advice !== null &&
     (st === "open" || st === "dicht") && r.preset_advice !== em.preset;
@@ -617,7 +618,9 @@ function emitterPanelHtml(em) {
 
     <h3>Nieuwe meting</h3>
     <form id="meas" class="grid3" autocomplete="off">
-      <label>Aanvoer °C<input name="t_in" inputmode="decimal" ${cv === null ? "required" : `placeholder="cv ${fmt(cv, 1)}" title="Leeg = cv-aanvoertemperatuur uit de projectinstellingen"`}></label>
+      ${supply !== null
+        ? `<label>Aanvoer °C<input name="t_in" inputmode="decimal" placeholder="cv ${fmt(supply, 0)}" title="Leeg = cv-temperatuur uit de projectinstellingen"></label>`
+        : `<label>Aanvoer °C<input name="t_in" inputmode="decimal" required></label>`}
       <label>Retour °C<input name="t_out" inputmode="decimal" required></label>
       <label>Ruimte °C<input name="t_room" inputmode="decimal" placeholder="${fmt(set.room_temp, 1)}"></label>
       <div style="grid-column:1/-1"><button class="btn primary" style="width:100%">Opslaan &amp; herberekenen</button></div>
@@ -648,9 +651,9 @@ function emitterPanelHtml(em) {
 
     <h3>Meethistorie</h3>
     ${ms.length ? `<table class="history"><thead><tr><th>Wanneer</th><th>Aanv.</th><th>Ret.</th><th>ΔT</th><th>Ruimte</th><th>Stand</th><th></th></tr></thead>
-      <tbody>${ms.map((m) => { const tin = m.t_in ?? cv; return `<tr><td>${fmtDate(m.ts)}</td>
-        <td>${m.t_in === null || m.t_in === undefined ? `<span class="muted" title="cv-aanvoertemperatuur">${fmt(cv, 1)}</span>` : fmt(m.t_in, 1)}</td><td>${fmt(m.t_out, 1)}</td>
-        <td>${tin === null ? "–" : fmt(tin - m.t_out, 1)}</td><td>${m.t_room === null || m.t_room === undefined ? "–" : fmt(m.t_room, 1)}</td>
+      <tbody>${ms.map((m) => { const tIn = m.t_in ?? supply; return `<tr><td>${fmtDate(m.ts)}</td>
+        <td>${m.t_in == null ? `<span class="muted" title="cv-temperatuur">cv</span>` : fmt(m.t_in, 1)}</td><td>${fmt(m.t_out, 1)}</td>
+        <td>${tIn == null ? "–" : fmt(tIn - m.t_out, 1)}</td><td>${m.t_room === null || m.t_room === undefined ? "–" : fmt(m.t_room, 1)}</td>
         <td>${esc(presetLabel(valve, m.preset))}</td>
         <td><button class="x" data-del-m="${m.id}" title="Meting verwijderen">✕</button></td></tr>`; }).join("")}</tbody></table>`
       : `<p class="muted">Nog geen metingen.</p>`}
@@ -681,9 +684,8 @@ function bindEmitterPanel(side, em) {
     ev.preventDefault();
     const f = ev.target;
     const t_in = numOrNull(f.t_in.value), t_out = numOrNull(f.t_out.value);
-    if (t_out === null || (t_in === null && cvSupply(em) === null)) {
-      return toast(cvSupply(em) === null ? "Vul aanvoer en retour in" : "Vul de retour in", true);
-    }
+    if (t_out === null) return toast("Vul de retourtemperatuur in", true);
+    if (t_in === null && supplyFor(em) === null) return toast("Vul de aanvoer in of stel de cv-temperatuur in bij ⚙", true);
     await mutate("POST", `emitters/${em.id}/measurements`,
       { t_in, t_out, t_room: numOrNull(f.t_room.value) });
     toast("Opgeslagen en herberekend");
@@ -721,7 +723,7 @@ function renderTable() {
       rows.push(`<tr data-id="${e.id}">
         <td><b>${esc(e.name)}</b><div class="muted small">${esc(e.room || "")}</div></td>
         <td><input name="preset" inputmode="decimal" value="${e.preset ?? ""}" title="${valve ? esc(valve.name) : "Geen ventieltype"}"></td>
-        <td><input name="t_in" inputmode="decimal" placeholder="${cvSupply(e) !== null ? "cv " + fmt(cvSupply(e), 1) : r.t_in ?? ""}"></td>
+        <td><input name="t_in" inputmode="decimal" placeholder="${supplyFor(e) !== null ? `cv ${fmt(supplyFor(e), 0)}` : r.t_in ?? ""}"></td>
         <td><input name="t_out" inputmode="decimal" placeholder="${r.t_out ?? ""}"></td>
         <td><input name="t_room" inputmode="decimal" placeholder="${r.t_room ?? fmt(p.settings.room_temp, 1)}"></td>
         <td class="num">${r.dt !== undefined ? fmt(r.dt, 1) : "–"}</td>
@@ -740,8 +742,7 @@ function renderTable() {
         <button class="btn primary" id="btn-save-round">Meetronde opslaan &amp; herberekenen</button>
         <button class="btn" id="btn-apply-all" ${anyAdvice ? "" : "disabled"}>Alle geadviseerde standen ingesteld</button>
         <span class="muted small">Vul aanvoer/retour in (Enter = volgend veld). Lege regels worden overgeslagen;
-          grijze waarden zijn de laatste meting. Met een ingestelde cv-aanvoertemperatuur (⚙)
-          mag de aanvoer leeg blijven.</span>
+          grijze waarden zijn de laatste meting${p.settings.supply_temp != null ? "; lege aanvoer = cv-temperatuur" : ""}.</span>
       </div>
       <div class="side" style="width:auto;max-width:none;border:none;padding:0 0 12px;background:none">${summaryHtml()}</div>
       ${rows.length ? `<table class="round"><thead><tr>
@@ -767,9 +768,8 @@ function renderTable() {
       const t_in = numOrNull($("[name=t_in]", tr).value), t_out = numOrNull($("[name=t_out]", tr).value);
       if (t_in === null && t_out === null) continue;
       const em = emitter(tr.dataset.id);
-      if (t_out === null || (t_in === null && cvSupply(em) === null)) {
-        toast(cvSupply(em) === null ? `Vul bij ${em.name} zowel aanvoer als retour in`
-          : `Vul bij ${em.name} de retour in`, true);
+      if (t_out === null || (t_in === null && supplyFor(em) === null)) {
+        toast(`Vul bij ${em.name} ${t_out === null ? "de retour" : "de aanvoer (of de cv-temperatuur bij ⚙)"} in`, true);
         return;
       }
       items.push({ emitter_id: tr.dataset.id, t_in, t_out, t_room: numOrNull($("[name=t_room]", tr).value) });
@@ -865,7 +865,7 @@ function loadScript(src) {
   return new Promise((resolve, reject) => {
     const s = document.createElement("script");
     s.src = src; s.onload = resolve;
-    s.onerror = () => reject(new Error("PDF-ondersteuning kon niet geladen worden (geen internet?). Exporteer de PDF als PNG/JPG."));
+    s.onerror = () => reject(new Error("PDF-ondersteuning kon niet geladen worden. Exporteer de PDF als PNG/JPG."));
     document.head.appendChild(s);
   });
 }
@@ -876,7 +876,10 @@ async function pdfToImages(file) {
     await loadScript(PDFJS + "pdf.min.js");
     window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js";
   }
-  const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  // isEvalSupported: false sluit CVE-2024-4367 (code uitvoeren via een kwaadaardig PDF-font).
+  const pdf = await window.pdfjsLib.getDocument({
+    data: await file.arrayBuffer(), isEvalSupported: false, enableXfa: false,
+  }).promise;
   const out = [];
   for (let i = 1; i <= Math.min(pdf.numPages, 20); i++) {
     const page = await pdf.getPage(i);
@@ -952,11 +955,10 @@ async function editSettings() {
       </select></label>
       <label>Doel-ΔT radiatoren (K)<input name="target_dt" inputmode="decimal" value="${s.target_dt}"></label>
       <label>Doel-ΔT vloerverwarming (K)<input name="ufh_target_dt" inputmode="decimal" value="${s.ufh_target_dt}"></label>
+      <label>Cv-temperatuur aanvoer (°C)<input name="supply_temp" inputmode="decimal" value="${s.supply_temp ?? ""}" placeholder="leeg = per element meten"></label>
+      <label>Cv-temperatuur vloerverwarming (°C)<input name="ufh_supply_temp" inputmode="decimal" value="${s.ufh_supply_temp ?? ""}" placeholder="leeg = zelfde als cv"></label>
+      <p class="muted small" id="supply-hint" style="grid-column:1/-1;margin:0"></p>
       <label>Ruimtetemperatuur standaard (°C)<input name="room_temp" inputmode="decimal" value="${s.room_temp}"></label>
-      <label title="Aanvoertemperatuur van de cv; metingen zonder aanvoer rekenen hiermee (ΔT = cv-aanvoer − retour)">Cv-aanvoertemperatuur (°C)
-        <input name="supply_temp" inputmode="decimal" value="${s.supply_temp ?? ""}" placeholder="leeg = per meting"></label>
-      <label title="Alleen nodig als de vloerverwarming een eigen (gemengde) aanvoer heeft">Aanvoer vloerverwarming (°C)
-        <input name="ufh_supply_temp" inputmode="decimal" value="${s.ufh_supply_temp ?? ""}" placeholder="leeg = cv-aanvoer"></label>
       <label>Tolerantie "goed" (± % debiet)<input name="tolerance_pct" inputmode="decimal" value="${s.tolerance_pct}"></label>
     </div>
     <label>Methode<select name="method">
@@ -990,9 +992,22 @@ async function editSettings() {
         }));
         bindRm();
       };
+      const hint = () => {
+        const v = (n) => numOrNull($(`[name=${n}]`, b).value);
+        const sup = v("supply_temp"), ufh = v("ufh_supply_temp") ?? sup;
+        const parts = [];
+        if (sup !== null && v("target_dt") !== null) parts.push(`radiatoren ${fmt(sup - v("target_dt"), 1)} °C`);
+        if (ufh !== null && v("ufh_target_dt") !== null) parts.push(`vloerverwarming ${fmt(ufh - v("ufh_target_dt"), 1)} °C`);
+        $("#supply-hint", b).textContent = parts.length
+          ? `Beoogde retour (cv-temperatuur − doel-ΔT): ${parts.join(", ")}. Metingen zonder aanvoer gebruiken de cv-temperatuur.`
+          : "Vul de cv-temperatuur in om alleen de retour per element te hoeven meten; ΔT = cv-temperatuur − retour.";
+      };
+      ["supply_temp", "ufh_supply_temp", "target_dt", "ufh_target_dt"].forEach((n) => $(`[name=${n}]`, b).addEventListener("input", hint));
+      hint();
       $("[name=heat_source]", b).onchange = (ev) => {
         const dt = { ketel: 20, warmtepomp: 5 }[ev.target.value];
         if (dt) $("[name=target_dt]", b).value = dt;
+        hint();
       };
       $("#btn-del-project", b).onclick = async () => {
         if (!confirm(`Project '${p.name}' met alle plattegronden en metingen definitief verwijderen?`)) return;
@@ -1018,9 +1033,8 @@ async function editSettings() {
       settings: {
         heat_source: val("heat_source"), target_dt: numOrNull(val("target_dt")),
         ufh_target_dt: numOrNull(val("ufh_target_dt")),
-        room_temp: numOrNull(val("room_temp")),
         supply_temp: numOrNull(val("supply_temp")), ufh_supply_temp: numOrNull(val("ufh_supply_temp")),
-        tolerance_pct: numOrNull(val("tolerance_pct")),
+        room_temp: numOrNull(val("room_temp")), tolerance_pct: numOrNull(val("tolerance_pct")),
         method: val("method"), keep_total_flow: $("[name=keep_total_flow]", body).checked,
         radiator_exponent: numOrNull(val("radiator_exponent")), ufh_exponent: numOrNull(val("ufh_exponent")),
         radiator_nominal: regime(val("radiator_nominal")), ufh_nominal: regime(val("ufh_nominal")),
