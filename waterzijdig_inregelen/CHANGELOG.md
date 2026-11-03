@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.0
+- Leidingverloop intekenen op de plattegronden (aftakkingen snappen op bestaande leidingen).
+- Nieuw tabblad **Schema**: hydraulisch schema op basis van plattegronden en leidingverloop,
+  met verdiepingen, aftakkingen, vloerverwarmingsverdeler en het advies per element.
+- Componenten toe te voegen aan het schema: secundaire pomp, boilervat, buffervat,
+  thermostaat en mengklep. Schema te downloaden als SVG.
+
 ## 0.1.3
 - Nieuwe projectinstelling **cv-temperatuur** (aanvoer van cv-ketel of warmtepomp, optioneel
   apart voor vloerverwarming). Metingen hebben dan alleen de retour nodig: ΔT =
