@@ -254,6 +254,12 @@ dialog.wide { width: min(820px, calc(100vw - 24px)); }
 .gas input { width: 110px; }
 .gas input[type=date] { width: 140px; }
 .crit { margin: 0; padding-left: 18px; }
+.curve-formats { display: grid; gap: 10px; margin: 10px 0; }
+.fmt-box { border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; min-width: 0; }
+.fmt-box h4 { margin: 0 0 6px; font-size: 13px; }
+.fmt-box .formula { margin: 6px 0 0; font-variant-numeric: tabular-nums; }
+.fmt-box .pts { display: block; overflow-x: auto; }
+.fmt-box .pts td, .fmt-box .pts th { white-space: nowrap; }
 .heating details { margin: 8px 0 16px; }
 .heating details table { max-width: 720px; margin-top: 8px; }
 .chart-wrap { position: relative; }

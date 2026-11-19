@@ -127,6 +127,21 @@ def test_single_radiator_curve():
     assert line["slope"] > 0 and line["foot"] >= 20
 
 
+def test_line_formats_agree():
+    L = s.line_formats(-10, 55.0, 18, 26.0, 20)
+    # twee punten
+    assert L["end"] == 55 and L["foot"] == 26 and L["at_0"] == pytest.approx(55 - 29 * 10 / 28, abs=0.05)
+    assert L["at_20"] == pytest.approx(55 - 29 * 30 / 28, abs=0.05)
+    # helling + verschuiving reproduceert het eindpunt en (op afronding na) het voetpunt
+    assert L["slope"] == pytest.approx(29 / 28, abs=0.005)
+    assert 20 + L["slope"] * 30 + L["shift"] == pytest.approx(55, abs=0.06)
+    assert 20 + L["slope"] * 2 + L["shift"] == pytest.approx(26, abs=0.2)
+    # puntentabel, oplopend, vanaf het ontwerppunt
+    temps = [r["t_out"] for r in L["table"]]
+    assert temps == [-10, -5, 0, 5, 10, 15, 18, 20] and L["table"][0]["supply"] == 55
+    assert s.line_formats(-12, 50.0, 16, 25.0, 21)["table"][0]["t_out"] == -12
+
+
 def test_critical_room_sets_the_curve():
     ems = [_em("bad", "Badkamer", 600), _em("slk", "Slaapkamer", 1200)]
     rooms = [{"name": "Badkamer", "temp": 24, "loss_w": 500},

@@ -329,7 +329,7 @@ def _loads(project: Dict[str, Any], cfg: Dict[str, Any], gas: Dict[str, Any],
 
 
 def _curve(label: str, items: List[Dict[str, Any]], n: float, nominal: Sequence[float],
-           dt: float, t_d: float, base: float) -> Dict[str, Any]:
+           dt: float, t_d: float, base: float, t_ref: float = 20.0) -> Dict[str, Any]:
     reqs = []
     all_items, items = items, []
     for it in all_items:
@@ -376,12 +376,31 @@ def _curve(label: str, items: List[Dict[str, Any]], n: float, nominal: Sequence[
     foot = _ceil_half(max(foot, max(r["theta"] for r in reach)))
     out.update(design_supply=round(t_sd, 1), design_return=points[0]["return"],
                flow_total=round(sum(flows)), points=points,
-               line={"t_design": t_d, "end": end, "t_base": base, "foot": foot,
-                     "slope": round((end - foot) / (base - t_d), 2),
-                     "at_0": round(foot + (end - foot) * base / (base - t_d), 1)})
+               line=line_formats(t_d, end, base, foot, t_ref))
     if len(crit) > 1:
         out["second_supply"] = crit[1]["supply"]
     return out
+
+
+def line_formats(t_d: float, end: float, base: float, foot: float, t_ref: float) -> Dict[str, Any]:
+    """De rechte stooklijn in de notaties die ketels en thermostaten gebruiken.
+
+    * **twee punten**: eindpunt (ontwerp-buitentemperatuur) en voetpunt (stookgrens), plus het
+      voetpunt bij +20 °C buiten voor regelaars die dat punt vast hebben;
+    * **helling en parallelverschuiving**:
+      ``aanvoer = t_ref + helling · (t_ref − buiten) + verschuiving`` met ``t_ref`` de
+      ingestelde kamertemperatuur; de verschuiving is zo gekozen dat het eindpunt exact klopt;
+    * **punten** voor regelaars die meerdere punten vragen.
+    """
+    def at(t: float) -> float:
+        return end + (foot - end) * (t - t_d) / (base - t_d)
+    slope = round((end - foot) / (base - t_d), 2)
+    temps = sorted({t_d, base, *(t for t in (-15, -10, -5, 0, 5, 10, 15, 20) if t > t_d)})
+    return {"t_design": t_d, "end": end, "t_base": base, "foot": foot,
+            "at_0": round(at(0), 1), "at_20": round(at(20), 1),
+            "slope": slope, "t_ref": t_ref,
+            "shift": round(end - t_ref - slope * (t_ref - t_d), 1),
+            "table": [{"t_out": t, "supply": round(at(t), 1)} for t in temps]}
 
 
 def _ceil_half(v: float) -> float:
@@ -429,7 +448,7 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
         n = float(cfg["ufh_exponent"] if is_ufh else cfg["radiator_exponent"])
         nominal = cfg["ufh_nominal"] if is_ufh else cfg["radiator_nominal"]
         dt = max(float(cfg["ufh_target_dt"] if is_ufh else cfg["target_dt"]), 0.5)
-        g = _curve(label, items, n, nominal, dt, t_d, base)
+        g = _curve(label, items, n, nominal, dt, t_d, base, float(cfg["room_temp"]))
         g["key"] = key
         out["groups"].append(g)
         src = cfg["heat_source"]

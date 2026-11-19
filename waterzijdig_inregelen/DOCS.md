@@ -119,8 +119,22 @@ hele stooklijn omlaag. Met die debieten vast (ingeregeld, thermostaatkranen open
 graad buitentemperatuur de benodigde aanvoer. Omdat veel ketels een rechte stooklijn hebben,
 geeft de app ook de **rechte lijn door het ontwerppunt die nergens te laag is**: eindpunt (bij
 de ontwerp-buitentemperatuur), voetpunt (bij de stookgrens) en helling in K aanvoer per K
-buitentemperatuur. Hoe je die invoert verschilt per merk: soms als twee punten, soms als
-helling. Stel daarna in de praktijk bij in stappen van 1–2 K.
+buitentemperatuur. Die lijn staat er altijd in drie notaties, zodat hij voor elke ketel of
+thermostaat direct bruikbaar is:
+
+* **A · Twee punten**: *eindpunt* (aanvoer bij de ontwerp-buitentemperatuur, tevens de
+  maximale aanvoer) en *voetpunt* (aanvoer bij de stookgrens). Ligt het voetpunt bij je
+  regelaar vast op +20 °C buiten, gebruik dan *voetpunt bij +20 °C*.
+* **B · Helling en parallelverschuiving**:
+  `aanvoer = kamertemp. + helling · (kamertemp. − buiten) + verschuiving`, met de
+  kamertemperatuur uit de projectinstellingen (standaard 20 °C). De verschuiving is zo gekozen
+  dat het eindpunt exact klopt.
+* **C · Aanvoer per buitentemperatuur** van −10 tot +20 °C, voor regelaars die meerdere
+  punten vragen. Boven de stookgrens staat de verwarming uit (grijs).
+
+Gebruikt je regelaar genummerde, gebogen stooklijnen, kies dan de curve die bij de
+ontwerp-buitentemperatuur op het eindpunt uitkomt. Stel daarna in de praktijk bij in stappen
+van 1–2 K.
 
 *Gebruik … als ontwerp-aanvoer* zet het ontwerppunt als ontwerp-aanvoer in het tabblad
 Warmteverlies, en schaalt (bij lasten uit het gasverbruik) het warmteverlies mee. Zo regel je

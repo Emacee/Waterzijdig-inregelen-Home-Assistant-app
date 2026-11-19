@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.1
+- Stooklijn: de rechte stooklijn staat er altijd in drie notaties, zodat hij op elke ketel of
+  thermostaat direct in te stellen is:
+  - **A · twee punten**: eindpunt, voetpunt bij de stookgrens, voetpunt bij +20 °C buiten,
+    maximale aanvoer en stookgrens;
+  - **B · helling en parallelverschuiving** ten opzichte van de ingestelde kamertemperatuur,
+    met de formule erbij;
+  - **C · aanvoer per buitentemperatuur** (−10 t/m +20 °C) voor regelaars die meerdere
+    punten vragen.
+
 ## 0.3.0
 - Nieuw tabblad **Warmteverlies**: ruimtes uit de warmteverliesberekening met
   ontwerptemperatuur en warmteverlies. Upload de berekening als CSV, Excel (.xlsx) of PDF

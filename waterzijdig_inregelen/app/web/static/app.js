@@ -1234,16 +1234,44 @@ function curveCard(x) {
   const L = x.line, set = S.project.settings;
   const crit = (x.critical || []).slice(0, 3);
   const cur = x.key === "vloer" ? set.ufh_design_supply_temp : set.design_supply_temp;
+  const c = (v) => `${fmt(v, 1)} °C`;
+  const shift = `${L.shift > 0 ? "+" : L.shift < 0 ? "−" : "±"}${fmt(Math.abs(L.shift), 1)} K`;
   return `<h3 style="margin-top:0">${esc(x.label)}</h3>
     <dl class="kv">
-      <dt>Ontwerppunt</dt><dd><b>${fmt(x.design_supply, 1)} °C</b> aanvoer, retour ~${fmt(x.design_return, 1)} °C bij ${fmt(L.t_design, 0)} °C buiten</dd>
-      <dt>Rechte stooklijn</dt><dd><b>${fmt(L.end, 1)} °C</b> bij ${fmt(L.t_design, 0)} °C → <b>${fmt(L.foot, 1)} °C</b> bij ${fmt(L.t_base, 0)} °C buiten
-        <br><span class="muted">helling ${fmt(L.slope, 2)} K per K; bij 0 °C buiten ${fmt(L.at_0, 1)} °C</span></dd>
-      <dt>Totaal debiet</dt><dd>${fmt(x.flow_total, 0)} l/h bij ontwerp</dd>
+      <dt>Ontwerppunt</dt><dd><b>${c(x.design_supply)}</b> aanvoer, retour ~${c(x.design_return)} bij ${fmt(L.t_design, 0)} °C buiten
+        <span class="muted">· ${fmt(x.flow_total, 0)} l/h</span></dd>
     </dl>
-    ${crit.length ? `<p class="small" style="margin:8px 0 4px">Bepaald door:</p><ul class="crit small">${crit.map((c, i) => `<li>${esc(c.name)}${c.room ? ` <span class="muted">(${esc(c.room)}, ${fmt(c.theta, 0)} °C)</span>` : ""}:
-      ${fmt(c.supply, 1)} °C nodig voor ${fmt(c.q, 0)} W${i === 0 && x.second_supply ? ` <span class="muted">— zonder dit element ${fmt(x.second_supply, 1)} °C</span>` : ""}</li>`).join("")}</ul>` : ""}
-    <p><button class="btn small" data-use-design ${cur === L.end ? "disabled" : ""}>${cur === L.end ? `Ontwerp-aanvoer staat op ${fmt(L.end, 1)} °C` : `Gebruik ${fmt(L.end, 1)} °C als ontwerp-aanvoer`}</button></p>`;
+    <div class="curve-formats">
+      <div class="fmt-box">
+        <h4>A · Twee punten <span class="muted">(eindpunt / voetpunt)</span></h4>
+        <dl class="kv">
+          <dt>Eindpunt</dt><dd>buiten ${fmt(L.t_design, 0)} °C → aanvoer <b>${c(L.end)}</b></dd>
+          <dt>Voetpunt</dt><dd>buiten ${fmt(L.t_base, 0)} °C → aanvoer <b>${c(L.foot)}</b></dd>
+          <dt title="Voor regelaars waarbij het voetpunt vast op +20 °C buiten ligt">Voetpunt bij +20 °C</dt><dd>buiten 20 °C → aanvoer <b>${c(L.at_20)}</b></dd>
+          <dt>Max. aanvoer</dt><dd>${c(L.end)}</dd>
+          <dt>Stookgrens</dt><dd>${c(L.t_base)} buiten <span class="muted">(zomer-/uitschakeltemperatuur)</span></dd>
+        </dl>
+      </div>
+      <div class="fmt-box">
+        <h4>B · Helling en parallelverschuiving</h4>
+        <dl class="kv">
+          <dt>Helling</dt><dd><b>${fmt(L.slope, 2)}</b> <span class="muted">K aanvoer per K buiten</span></dd>
+          <dt>Parallelverschuiving</dt><dd><b>${shift}</b></dd>
+          <dt>Kamertemperatuur</dt><dd>${c(L.t_ref)} <span class="muted">(instelling thermostaat)</span></dd>
+        </dl>
+        <p class="muted small formula">aanvoer = ${fmt(L.t_ref, 0)} + ${fmt(L.slope, 2)} × (${fmt(L.t_ref, 0)} − buiten) ${L.shift < 0 ? "−" : "+"} ${fmt(Math.abs(L.shift), 1)}</p>
+      </div>
+      <div class="fmt-box">
+        <h4>C · Aanvoer per buitentemperatuur</h4>
+        <table class="history pts"><thead><tr><th>Buiten</th>${L.table.map((r) => `<th>${fmt(r.t_out, 0)}</th>`).join("")}</tr></thead>
+          <tbody><tr><td>Aanvoer</td>${L.table.map((r) => `<td${r.t_out > L.t_base ? ' class="muted" title="Boven de stookgrens: verwarming uit"' : ""}>${fmt(r.supply, 1)}</td>`).join("")}</tr></tbody></table>
+      </div>
+    </div>
+    <p class="muted small">A en B beschrijven dezelfde rechte lijn. Gebruikt je regelaar gebogen stooklijnen met een nummer,
+      kies dan de curve die bij ${fmt(L.t_design, 0)} °C buiten op ${c(L.end)} uitkomt. Stel daarna bij in stappen van 1–2 K.</p>
+    ${crit.length ? `<p class="small" style="margin:8px 0 4px">Bepaald door:</p><ul class="crit small">${crit.map((cc, i) => `<li>${esc(cc.name)}${cc.room ? ` <span class="muted">(${esc(cc.room)}, ${fmt(cc.theta, 0)} °C)</span>` : ""}:
+      ${c(cc.supply)} nodig voor ${fmt(cc.q, 0)} W${i === 0 && x.second_supply ? ` <span class="muted">— zonder dit element ${c(x.second_supply)}</span>` : ""}</li>`).join("")}</ul>` : ""}
+    <p><button class="btn small" data-use-design ${cur === L.end ? "disabled" : ""}>${cur === L.end ? `Ontwerp-aanvoer staat op ${c(L.end)}` : `Gebruik ${c(L.end)} als ontwerp-aanvoer`}</button></p>`;
 }
 
 async function pasteGas() {
