@@ -17,6 +17,19 @@
 - Een niet gemeten ruimtetemperatuur valt terug op de ontwerptemperatuur van de ruimte.
 - Meetronde met kolom **Doelretour**; CSV-export met ontwerptemperatuur, aandeel
   warmteverlies, ontwerpretour en ontwerpdebiet.
+- **Excel-sjabloon** voor de warmteverliesberekening met de ruimtes van het project; ingevuld
+  weer te uploaden.
+- Nieuw tabblad **Stooklijn**:
+  - gasverbruik plakken uit Excel (meterstanden, verbruik per maand of van–tot-perioden);
+  - graaddagen automatisch ophalen bij het KNMI (21 stations) of zelf invullen;
+  - fit van verbruik tegen graaddagen: gas voor warm water en koken, gas per graaddag,
+    warmteverliescoëfficiënt H en de warmtebehoefte bij de ontwerp-buitentemperatuur,
+    vergeleken met de warmteverliesberekening;
+  - benodigde aanvoertemperatuur per buitentemperatuur voor radiatoren en
+    vloerverwarming, met de rechte stooklijn (eindpunt, voetpunt, helling) die nergens te
+    laag is en de ruimtes die de stooklijn bepalen;
+  - met één klik het ontwerppunt overnemen als ontwerp-aanvoer, met het warmteverlies
+    geschaald naar het werkelijke gasverbruik.
 
 ## 0.2.1
 - Meetronde: aanvoer en retour **bij de warmtebron** in te vullen; bij een cv-ketel volgt

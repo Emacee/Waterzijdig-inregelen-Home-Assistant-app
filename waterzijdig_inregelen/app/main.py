@@ -6,12 +6,13 @@ Elke wijziging geeft het volledige project plus de herberekende analyse terug.
 """
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
 import logging
 import os
-from datetime import datetime
+from datetime import date as _date, datetime, timedelta
 from typing import Any, Dict, List, Literal, Optional, Tuple
 from urllib.parse import quote
 
@@ -21,7 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import __version__
-from . import heatloss
+from . import heatloss, stooklijn
 from .balance import DEFAULT_SETTINGS, analyze, norm_room, settings_of, supply_temp_for
 from .schema import COMPONENT_LABELS, COMPONENT_TYPES, build_schema
 from .store import NotFound, Store, find, new_id, now_iso
@@ -77,7 +78,8 @@ async def _not_found(_: Request, exc: NotFound):
 
 
 def _out(p: Dict[str, Any]) -> Dict[str, Any]:
-    return {"project": p, "analysis": analyze(p), "schema": build_schema(p)}
+    return {"project": p, "analysis": analyze(p), "schema": build_schema(p),
+            "heating": stooklijn.analyze(p)}
 
 
 # ---- payloads ----------------------------------------------------------------
@@ -101,6 +103,21 @@ class Settings(_M):
     ufh_supply_temp: Optional[float] = Field(None, ge=20, le=95)
     design_supply_temp: Optional[float] = Field(None, ge=20, le=95)
     ufh_design_supply_temp: Optional[float] = Field(None, ge=20, le=95)
+    loss_factor: Optional[float] = Field(None, ge=0.2, le=3)
+    gas_kwh_per_m3: Optional[float] = Field(None, ge=5, le=15)
+    boiler_efficiency: Optional[float] = Field(None, ge=0.5, le=1.1)
+    outdoor_design_temp: Optional[float] = Field(None, ge=-25, le=5)
+    heating_limit_temp: Optional[float] = Field(None, ge=10, le=22)
+    dhw_gas_m3_year: Optional[float] = Field(None, ge=0, le=5000)
+    curve_basis: Optional[Literal["auto", "warmteverlies", "gas"]] = None
+    knmi_station: Optional[int] = None
+
+    @field_validator("knmi_station")
+    @classmethod
+    def _check_station(cls, v):
+        if v is not None and v not in stooklijn.STATION_IDS:
+            raise ValueError("onbekend KNMI-station")
+        return v
     tolerance_pct: Optional[float] = Field(None, ge=0, le=100)
     keep_total_flow: Optional[bool] = None
     method: Optional[Literal["auto", "dt"]] = None
@@ -157,6 +174,21 @@ class RoomIn(_M):
 
 class RoomsIn(_M):
     rooms: List[RoomIn] = Field(..., max_length=300)
+
+
+class GasPeriodIn(_M):
+    start: _date
+    end: _date
+    gas_m3: float = Field(..., ge=0, le=100000)
+    degree_days: Optional[float] = Field(None, ge=0, le=10000)
+
+
+class GasPeriodsIn(_M):
+    periods: List[GasPeriodIn] = Field(..., max_length=stooklijn.MAX_PERIODS)
+
+
+class GasText(_M):
+    text: str = Field(..., max_length=1_000_000)
 
 
 class PipeIn(_M):
@@ -437,6 +469,93 @@ async def set_rooms(pid: str, body: RoomsIn):
         rooms.append({"id": r.id if r.id in known else new_id(), "name": name,
                       "temp": r.temp, "loss_w": r.loss_w})
     p["rooms"] = rooms
+    return _out(store.save(p))
+
+
+@app.get("/api/projects/{pid}/heatloss/template.xlsx")
+async def heatloss_template(pid: str):
+    """Excel-sjabloon met de ruimtes van het project, dat de import zonder meer herkent."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+
+    p = store.get(pid)
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Warmteverlies"
+    ws.append(["Ruimte", "Ontwerptemperatuur (°C)", "Warmteverlies (W)"])
+    for c in ws[1]:
+        c.font = Font(bold=True)
+    names = {norm_room(r["name"]): r for r in p["rooms"]}
+    for e in p["emitters"]:
+        if norm_room(e.get("room")) and norm_room(e["room"]) not in names:
+            names[norm_room(e["room"])] = {"name": e["room"].strip(), "temp": None, "loss_w": None}
+    for r in names.values():
+        ws.append([r["name"], r.get("temp"), r.get("loss_w")])
+    ws.column_dimensions["A"].width = 28
+    ws.column_dimensions["B"].width = 24
+    ws.column_dimensions["C"].width = 20
+    buf = io.BytesIO()
+    wb.save(buf)
+    return Response(buf.getvalue(),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": 'attachment; filename="warmteverlies.xlsx"'})
+
+
+# ---- stooklijn: gasverbruik en graaddagen --------------------------------------------
+
+@app.post("/api/projects/{pid}/gas/parse")
+async def parse_gas(pid: str, body: GasText):
+    """Perioden uit geplakte tekst; er wordt niets opgeslagen."""
+    store.get(pid)
+    periods, message = stooklijn.parse_periods(body.text)
+    return {"periods": periods, "message": message}
+
+
+@app.put("/api/projects/{pid}/gas/periods")
+async def set_gas_periods(pid: str, body: GasPeriodsIn):
+    p = store.get(pid)
+    out = []
+    for g in body.periods:
+        if g.end <= g.start:
+            raise HTTPException(422, f"Periode {g.start}: de einddatum moet na de begindatum liggen")
+        if (g.end - g.start).days > stooklijn.MAX_FETCH_DAYS:
+            raise HTTPException(422, f"Periode {g.start}: langer dan 10 jaar")
+        out.append({"start": g.start.isoformat(), "end": g.end.isoformat(),
+                    "gas_m3": g.gas_m3, "degree_days": g.degree_days})
+    p["gas_periods"] = sorted(out, key=lambda g: g["start"])
+    return _out(store.save(p))
+
+
+@app.post("/api/projects/{pid}/gas/knmi")
+async def fetch_degree_days(pid: str):
+    """Haal de etmaaltemperaturen van het gekozen KNMI-station op voor alle perioden."""
+    p = store.get(pid)
+    span = stooklijn.periods_span(p["gas_periods"])
+    if not span:
+        raise HTTPException(422, "Vul eerst perioden met gasverbruik in")
+    start, end = span
+    end = min(end, _date.today() - timedelta(days=1))
+    if (end - start).days > stooklijn.MAX_FETCH_DAYS:
+        raise HTTPException(422, "Meer dan 10 jaar aan perioden")
+    if end < start:
+        raise HTTPException(422, "De perioden liggen in de toekomst")
+    station = int(settings_of(p)["knmi_station"])
+    try:
+        temps = await asyncio.to_thread(stooklijn.fetch_knmi, station, start, end)
+    except Exception as exc:  # netwerk, HTTP-fout of onverwacht antwoord
+        _LOGGER.warning("KNMI ophalen mislukt: %s", exc)
+        raise HTTPException(502, "KNMI niet bereikbaar; vul de graaddagen met de hand in") from exc
+    if not temps:
+        raise HTTPException(502, "Het KNMI gaf geen temperaturen voor deze periode")
+    p = store.get(pid)  # opnieuw lezen: het ophalen kan even duren
+    knmi = p.get("knmi") or {}
+    if knmi.get("station") != station:
+        knmi = {"station": station, "temps": {}}
+    knmi["temps"].update(temps)
+    knmi["fetched"] = now_iso()
+    names = dict(stooklijn.KNMI_STATIONS)
+    knmi["name"] = names.get(station, str(station))
+    p["knmi"] = knmi
     return _out(store.save(p))
 
 

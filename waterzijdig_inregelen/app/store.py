@@ -88,6 +88,8 @@ class Store:
         p.setdefault("components", [])
         p.setdefault("boiler", [])
         p.setdefault("rooms", [])
+        p.setdefault("gas_periods", [])
+        p.setdefault("knmi", {})
         for fp in p["floorplans"]:
             fp.setdefault("pipes", [])
         return p

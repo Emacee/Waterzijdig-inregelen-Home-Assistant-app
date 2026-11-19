@@ -225,3 +225,60 @@ def test_heatloss_import_and_rooms(client):
     bad = {"rooms": [{"name": "Hal", "temp": 80}]}
     assert client.put(f"/api/projects/{pid}/rooms", json=bad).status_code == 422
     assert client.put(f"/api/projects/{pid}/rooms", json={"rooms": []}).json()["project"]["rooms"] == []
+
+
+def test_heatloss_template_roundtrip(client):
+    pytest.importorskip("openpyxl")
+    from app import heatloss
+    pid = client.post("/api/projects", json={"name": "Huis"}).json()["project"]["id"]
+    client.post(f"/api/projects/{pid}/emitters", json={"room": "Woonkamer"})
+    client.put(f"/api/projects/{pid}/rooms", json={"rooms": [{"name": "Badkamer", "temp": 24,
+                                                               "loss_w": 500}]})
+    r = client.get(f"/api/projects/{pid}/heatloss/template.xlsx")
+    assert r.status_code == 200 and r.content[:2] == b"PK"
+    rooms = heatloss.parse(r.content)
+    assert rooms == [{"name": "Badkamer", "temp": 24, "loss_w": 500}]  # lege rij telt niet mee
+    import io
+    import openpyxl
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    assert [c.value for c in wb.active["A"]] == ["Ruimte", "Badkamer", "Woonkamer"]
+
+
+def test_gas_periods_and_knmi(client, monkeypatch):
+    from app import stooklijn
+    pid = client.post("/api/projects", json={"name": "Huis"}).json()["project"]["id"]
+    r = client.post(f"/api/projects/{pid}/gas/parse",
+                    json={"text": "1-1-2024\t1000\n1-2-2024\t1260\n1-3-2024\t1480\n"})
+    periods = r.json()["periods"]
+    assert len(periods) == 2 and client.get(f"/api/projects/{pid}").json()["project"]["gas_periods"] == []
+    assert client.post(f"/api/projects/{pid}/gas/knmi").status_code == 422  # nog geen perioden
+    r = client.put(f"/api/projects/{pid}/gas/periods", json={"periods": periods})
+    assert r.status_code == 200 and len(r.json()["project"]["gas_periods"]) == 2
+    bad = [{"start": "2024-02-01", "end": "2024-01-01", "gas_m3": 5}]
+    assert client.put(f"/api/projects/{pid}/gas/periods", json={"periods": bad}).status_code == 422
+
+    calls = []
+
+    def fake(station, start, end):
+        calls.append((station, start, end))
+        out, d = {}, start
+        while d <= end:
+            out[d.isoformat()] = 3.0
+            d = d.fromordinal(d.toordinal() + 1)
+        return out
+    monkeypatch.setattr(stooklijn, "fetch_knmi", fake)
+    assert client.put(f"/api/projects/{pid}", json={"settings": {"knmi_station": 1}}).status_code == 422
+    client.put(f"/api/projects/{pid}", json={"settings": {"knmi_station": 370,
+                                                          "dhw_gas_m3_year": 0}})
+    r = client.post(f"/api/projects/{pid}/gas/knmi")
+    assert r.status_code == 200
+    assert calls[0][0] == 370 and str(calls[0][1]) == "2024-01-01" and str(calls[0][2]) == "2024-02-29"
+    gas = r.json()["heating"]["gas"]
+    assert gas["periods"][0]["dd"] == 31 * 15 and gas["ok"]
+    assert r.json()["heating"]["knmi"]["name"] == "Eindhoven"
+    assert "temps" not in r.json()["heating"]["knmi"]
+
+    def boom(*_):
+        raise OSError("geen netwerk")
+    monkeypatch.setattr(stooklijn, "fetch_knmi", boom)
+    assert client.post(f"/api/projects/{pid}/gas/knmi").status_code == 502

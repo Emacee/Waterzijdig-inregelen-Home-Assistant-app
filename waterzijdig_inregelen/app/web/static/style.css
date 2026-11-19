@@ -14,6 +14,8 @@
   --danger: #c92a2a;
   --shadow: 0 1px 3px rgba(0, 0, 0, .12);
   --radius: 10px;
+  --series-1: #2a78d6;
+  --series-2: #eb6834;
   color-scheme: light;
 }
 @media (prefers-color-scheme: dark) {
@@ -31,6 +33,8 @@
     --invalid: #8a929c;
     --none: #5c636d;
     --shadow: 0 1px 3px rgba(0, 0, 0, .5);
+    --series-1: #3987e5;
+    --series-2: #d95926;
     color-scheme: dark;
   }
 }
@@ -242,6 +246,39 @@ label.inline input { width: 80px; margin: 0; }
 .imp select { min-width: 150px; padding: 4px 6px; }
 .imp td:nth-child(2), .imp th:nth-child(2) { text-align: left; }
 dialog.wide { width: min(820px, calc(100vw - 24px)); }
+
+/* ---- stooklijn ---- */
+.heat-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr); gap: 16px; margin-bottom: 16px; }
+.card-panel { background: var(--panel); border-radius: var(--radius); box-shadow: var(--shadow); padding: 14px 16px; min-width: 0; }
+.card-panel h3:first-child { margin-top: 0; }
+.gas input { width: 110px; }
+.gas input[type=date] { width: 140px; }
+.crit { margin: 0; padding-left: 18px; }
+.heating details { margin: 8px 0 16px; }
+.heating details table { max-width: 720px; margin-top: 8px; }
+.chart-wrap { position: relative; }
+.chart-svg { display: block; width: 100%; height: auto; overflow: visible; }
+.chart-svg .grid { stroke: var(--line); stroke-width: 1; }
+.chart-svg .axis { stroke: var(--muted); stroke-width: 1; }
+.chart-svg .tick { fill: var(--muted); font-size: 11px; }
+.chart-svg .ln { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.chart-svg .ln.dash { stroke-dasharray: 5 4; stroke-width: 1.5; }
+.chart-svg .s1 { stroke: var(--series-1); } .chart-svg .dot.s1 { fill: var(--series-1); stroke: var(--panel); stroke-width: 2; }
+.chart-svg .s2 { stroke: var(--series-2); }
+.chart-svg .neutral { stroke: var(--muted); }
+.chart-svg .cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 2 3; }
+.chart-svg .hit { fill: transparent; }
+.chart-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--text); margin-bottom: 6px; }
+.chart-legend i { display: inline-block; width: 18px; height: 0; border-top: 2px solid; vertical-align: middle; margin-right: 6px; }
+.chart-legend i.s1 { border-color: var(--series-1); } .chart-legend i.s2 { border-color: var(--series-2); }
+.chart-legend i.neutral { border-color: var(--muted); }
+.chart-legend i.dash { border-top-style: dashed; }
+.chart-legend i.dotmark { width: 9px; height: 9px; border: none; border-radius: 50%; background: var(--series-1); }
+.chart .tip {
+  position: absolute; pointer-events: none; background: var(--panel); color: var(--text); border: 1px solid var(--line);
+  border-radius: 6px; padding: 6px 8px; font-size: 12px; box-shadow: var(--shadow); white-space: nowrap; z-index: 5;
+}
+@media (max-width: 1000px) { .heat-grid { grid-template-columns: 1fr; } }
 
 /* ---- dialoog / toast ---- */
 dialog {

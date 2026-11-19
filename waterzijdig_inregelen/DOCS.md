@@ -77,6 +77,56 @@ tussen de elementen blijft zo gelijk; wat in totaal te veel of te weinig is, ver
 pompadvies. Een niet gemeten ruimtetemperatuur valt terug op de ontwerptemperatuur van de
 ruimte.
 
+**Excel-sjabloon**: de knop *Excel-sjabloon* downloadt een werkblad met de ruimtes van het
+project (kolommen Ruimte, Ontwerptemperatuur, Warmteverlies). Vul het in en upload het weer.
+
+## Stooklijn
+
+Het tabblad **Stooklijn** berekent welke aanvoertemperatuur bij elke buitentemperatuur nodig
+is, op basis van het werkelijke gasverbruik en de radiatoren per ruimte.
+
+1. **Gasverbruik**: klik *Gasverbruik plakken (Excel)* en plak twee of drie kolommen:
+   * meterstanden: `datum ⇥ meterstand` (oplopende standen);
+   * verbruik per maand: `jan 2024 ⇥ 250` (optioneel een derde kolom met graaddagen);
+   * perioden: `1-1-2024 ⇥ 1-4-2024 ⇥ 700` (van, tot, m³).
+
+   Neem minstens een jaar mee, inclusief de zomer, uit een periode zonder grote
+   verbouwingen of andere bewoning. Perioden zijn te bewerken in de tabel onderaan.
+2. **Graaddagen**: kies het dichtstbijzijnde KNMI-station en klik *Graaddagen ophalen*. De app
+   haalt de etmaaltemperaturen op en rekent ongewogen graaddagen uit:
+   `max(0, stookgrens − etmaalgemiddelde)` per dag. Alleen het station en de datums gaan naar
+   het KNMI. Zonder internet vul je de graaddagen per periode zelf in (basis 18 °C).
+3. **Uitgangspunten**: ontwerp-buitentemperatuur (−10 °C volgens ISSO 51), stookgrens (18 °C),
+   verbrandingswaarde (9,77 kWh/m³ bovenwaarde) en rendement van de ketel (HR ca. 90 %).
+
+**Gasverbruik → warmtebehoefte.** Per periode geldt `gas = a · dagen + b · graaddagen`. De fit
+geeft `a` (warm water en koken per dag) en `b` (gas per graaddag). Zitten er geen
+zomerperioden in, vul dan *warm water en koken* zelf in. Dan is
+`H = b · kWh/m³ · rendement · 1000 / 24` (W/K) en de warmtebehoefte bij ontwerp
+`H · (stookgrens − ontwerp-buitentemperatuur)`. De stookgrens verdisconteert de interne warmte.
+De grafiek *verbruik tegen graaddagen* laat zien hoe goed de perioden op de lijn passen.
+
+**Lasten per element.** *Automatisch*: de verdeling uit de warmteverliesberekening, geschaald
+zodat het totaal gelijk is aan de warmtebehoefte uit het gasverbruik (een berekening ligt
+meestal hoger dan de praktijk). Zonder warmteverliesberekening wordt de warmtebehoefte naar
+vermogen over de elementen verdeeld. Bij buitentemperatuur T is de last evenredig met
+`stookgrens − T`.
+
+**Stooklijn.** Het ontwerppunt is de laagste aanvoer waarbij élk element zijn last haalt
+met het doel-ΔT (⚙); het element dat die aanvoer bepaalt staat bovenaan onder *Bepaald door*,
+met de aanvoer die nodig zou zijn zonder dat element. Vergroot je dáár de afgifte, dan kan de
+hele stooklijn omlaag. Met die debieten vast (ingeregeld, thermostaatkranen open) volgt per
+graad buitentemperatuur de benodigde aanvoer. Omdat veel ketels een rechte stooklijn hebben,
+geeft de app ook de **rechte lijn door het ontwerppunt die nergens te laag is**: eindpunt (bij
+de ontwerp-buitentemperatuur), voetpunt (bij de stookgrens) en helling in K aanvoer per K
+buitentemperatuur. Hoe je die invoert verschilt per merk: soms als twee punten, soms als
+helling. Stel daarna in de praktijk bij in stappen van 1–2 K.
+
+*Gebruik … als ontwerp-aanvoer* zet het ontwerppunt als ontwerp-aanvoer in het tabblad
+Warmteverlies, en schaalt (bij lasten uit het gasverbruik) het warmteverlies mee. Zo regel je
+in op debieten die bij deze stooklijn horen. *Niet schalen* in het tabblad Warmteverlies
+draait de schaal terug.
+
 ## Leidingverloop en hydraulisch schema
 
 * **Leiding tekenen**: kies op de plattegrond **✎ Leiding** en klik de punten van het
@@ -153,6 +203,8 @@ optioneel een label: `8=0.56:N`.
   het datablad van je ventiel.
 * Het herkennen van een warmteverliesberekening is een hulpmiddel: rapporten hebben geen
   vaste indeling. Controleer de geïmporteerde waarden altijd.
+* De stooklijn gaat uit van een stabiele toestand en is een startpunt: zon, wind,
+  nachtverlaging en gebruik maken dat je in de praktijk nog bijstelt.
 * PDF-plattegronden worden in de browser omgezet met pdf.js (meegeleverd met de add-on,
   dus zonder internet). Maximaal 20 pagina's per PDF.
 

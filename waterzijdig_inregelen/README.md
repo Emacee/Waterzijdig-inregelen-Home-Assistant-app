@@ -36,6 +36,9 @@ nodig heeft bij een zo laag mogelijke aanvoertemperatuur.
 - **Warmteverliesberekening** — upload de berekening (CSV, Excel of PDF); per ruimte de
   ontwerptemperatuur en het warmteverlies, en per element de ontwerpretour en het
   ontwerpdebiet. Inregelen gebeurt dan op ontwerpdebiet per ruimte.
+- **Stooklijn** — uit historisch gasverbruik en KNMI-graaddagen de werkelijke warmtebehoefte,
+  en daarmee de benodigde aanvoertemperatuur per buitentemperatuur (eindpunt, voetpunt,
+  helling).
 - **Hydraulisch schema** — teken het leidingverloop op de plattegronden; het tabblad
   **Schema** tekent daaruit automatisch een tweepijpsschema met verdiepingen, aftakkingen,
   vloerverwarmingsverdeler en de adviezen per element. Voeg secundaire pompen, boiler- en

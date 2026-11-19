@@ -40,6 +40,7 @@ berekend. De add-on draait volledig lokaal en opent via de Home Assistant-zijbal
   o.a. Danfoss RA-N, Heimeier V-exact II, retourkoppelingen (slagen) en verdelers met
   debietmeter (l/min). Eigen ventieltypes zijn toe te voegen.
 - **Pompadvies** per groep, inregelen op gelijke ΔT, naar warmtevraag of op de warmteverliesberekening (ontwerpretour per ruimte, EN 442).
+- **Stooklijn** uit historisch gasverbruik en KNMI-graaddagen.
 - **Hydraulisch schema** — teken het leidingverloop op de plattegronden; het tabblad
   **Schema** tekent daaruit automatisch een tweepijpsschema met verdiepingen, aftakkingen,
   vloerverwarmingsverdeler en de adviezen per element. Voeg secundaire pompen, boiler- en

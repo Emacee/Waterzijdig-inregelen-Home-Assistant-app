@@ -67,6 +67,15 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "ufh_supply_temp": None,         # idem vloerverwarming; None = gelijk aan supply_temp
     "design_supply_temp": None,      # ontwerp-aanvoer (warmteverliesberekening); None = supply_temp
     "ufh_design_supply_temp": None,  # idem vloerverwarming; None = ufh_supply_temp / ontwerp-aanvoer
+    "loss_factor": 1.0,              # schaal op het warmteverlies (stooklijn: werkelijk gasverbruik)
+    # stooklijn (gasverbruik + graaddagen)
+    "gas_kwh_per_m3": 9.77,          # verbrandingswaarde aardgas (bovenwaarde, 35,17 MJ/m³)
+    "boiler_efficiency": 0.9,        # rendement van de ketel op bovenwaarde
+    "outdoor_design_temp": -10.0,    # ontwerp-buitentemperatuur (ISSO 51)
+    "heating_limit_temp": 18.0,      # stookgrens = basis van de graaddagen
+    "dhw_gas_m3_year": None,         # gas voor warm water en koken; None = uit de regressie
+    "curve_basis": "auto",           # auto | warmteverlies | gas
+    "knmi_station": 260,             # De Bilt
     "tolerance_pct": 10.0,
     "keep_total_flow": True,
     "method": "auto",                # auto | dt
@@ -310,6 +319,8 @@ def design(project: Dict[str, Any], cfg: Dict[str, Any]) -> Tuple[Dict[str, Dict
         ems = members.get(key, [])
         theta = _num(room.get("temp"))
         loss = _num(room.get("loss_w"))
+        if loss:
+            loss *= _num(cfg.get("loss_factor")) or 1.0
         info: Dict[str, Any] = {"id": room.get("id"), "name": room.get("name"), "temp": theta,
                                 "loss_w": loss, "emitters": [e["id"] for e in ems],
                                 "warnings": [], "complete": False}

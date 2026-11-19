@@ -5,7 +5,7 @@
 const S = {
   projects: [], project: null, analysis: null, results: new Map(),
   fpId: null, selectedId: null, mode: "plan", zoom: 1, compact: false,
-  pipeId: null, draw: null, schema: null, schemaZoom: 1,
+  pipeId: null, draw: null, schema: null, schemaZoom: 1, heating: null,
 };
 // pdf.js 3.11.174 (Apache-2.0) wordt met de add-on meegeleverd: werkt offline en zonder CDN.
 const PDFJS = "static/pdfjs/";
@@ -66,6 +66,7 @@ function setProject(data) {
   S.project = data.project;
   S.analysis = data.analysis;
   S.schema = data.schema;
+  S.heating = data.heating;
   S.results = new Map(data.analysis.emitters.map((r) => [r.id, r]));
   if (!S.project.floorplans.some((f) => f.id === S.fpId)) S.fpId = S.project.floorplans[0]?.id || null;
   if (S.selectedId && !S.project.emitters.some((e) => e.id === S.selectedId)) S.selectedId = null;
@@ -220,6 +221,7 @@ function renderProject() {
     <button class="btn ${S.mode === "plan" ? "primary" : ""}" data-mode="plan">Plattegrond</button>
     <button class="btn ${S.mode === "table" ? "primary" : ""}" data-mode="table">Meetronde</button>
     <button class="btn ${S.mode === "rooms" ? "primary" : ""}" data-mode="rooms" title="Ruimtes uit de warmteverliesberekening: ontwerptemperatuur, warmteverlies en ontwerpretour">Warmteverlies</button>
+    <button class="btn ${S.mode === "heating" ? "primary" : ""}" data-mode="heating" title="Stooklijn uit gasverbruik, graaddagen en de radiatoren per ruimte">Stooklijn</button>
     <button class="btn ${S.mode === "schema" ? "primary" : ""}" data-mode="schema">Schema</button>
     <a class="btn" href="api/projects/${p.id}/export.csv" download>CSV</a>
     <button class="icon-btn" id="btn-settings" title="Projectinstellingen">⚙</button>`;
@@ -228,6 +230,7 @@ function renderProject() {
   if (S.mode === "table") renderTable();
   else if (S.mode === "schema") renderSchema();
   else if (S.mode === "rooms") renderRooms();
+  else if (S.mode === "heating") renderHeating();
   else renderPlan();
 }
 
@@ -910,6 +913,7 @@ function renderRooms() {
       <div class="round-actions">
         <button class="btn primary" id="btn-hl-upload">Warmteverliesberekening uploaden</button>
         <button class="btn" id="btn-add-room">+ Ruimte</button>
+        <a class="btn" href="api/projects/${p.id}/heatloss/template.xlsx" download title="Excel met de ruimtes van dit project; vul temperatuur en warmteverlies in en upload hem weer">Excel-sjabloon</a>
         <input type="file" id="hl-file" hidden accept=".csv,.tsv,.txt,.xlsx,.pdf,text/csv,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
         <label class="inline">Ontwerp-aanvoer radiatoren °C
           <input name="design_supply_temp" inputmode="decimal" value="${set.design_supply_temp ?? ""}" placeholder="${set.supply_temp != null ? `cv ${fmt(set.supply_temp, 0)}` : "bijv. 55"}"></label>
@@ -921,6 +925,10 @@ function renderRooms() {
         ruimtenaam gelijk is. Met het vermogen van het element en de ontwerp-aanvoertemperatuur volgt de
         <b>ontwerpretour</b>: de retourtemperatuur waarbij het element precies het warmteverlies van zijn ruimte dekt.
         Een warme of krap bemeten ruimte krijgt zo een hogere retour (meer debiet) dan een koele of ruim bemeten ruimte.</p>
+      ${set.loss_factor != null && Math.abs(set.loss_factor - 1) > 1e-6 ? `<div class="notice">Het warmteverlies wordt
+        geschaald met <b>${fmt(set.loss_factor, 2)}</b> naar het werkelijke gasverbruik (tabblad Stooklijn). De kolom Warmteverlies
+        toont de ingevoerde waarde; aandeel, ontwerpretour en debiet zijn geschaald.
+        <button class="btn small" id="btn-reset-scale">Niet schalen</button></div>` : ""}
       ${A.need_supply ? `<div class="notice warn">Vul de ontwerp-aanvoertemperatuur in (hierboven) om de ontwerpretour te berekenen.</div>` : ""}
       ${total ? `<p class="small">Totaal warmteverlies <b>${fmt(total, 0)} W</b>${flowOf(false) ? ` · ontwerpdebiet radiatoren <b>${fmt(flowOf(false), 0)} l/h</b>` : ""}${flowOf(true) ? ` · vloerverwarming <b>${fmt(flowOf(true), 0)} l/h</b>` : ""}</p>` : ""}
       <table class="round rooms"><thead><tr>
@@ -975,6 +983,8 @@ function renderRooms() {
     if (inp.value.trim() !== "" && v === null) return toast("Ongeldig getal", true);
     await mutate("PUT", "", { settings: { [inp.name]: v } }).catch(() => {});
   }));
+  const reset = $("#btn-reset-scale", view);
+  if (reset) reset.onclick = () => mutate("PUT", "", { settings: { loss_factor: null } }).catch(() => {});
   $("#btn-add-room").onclick = () => {
     $(".empty-row", view)?.remove();
     $("#rooms-body").insertAdjacentHTML("beforeend", roomRow({ name: "", temp: null, loss_w: null }, []));
@@ -1070,6 +1080,289 @@ async function importHeatloss(file) {
   if (!n) return toast("Niets geselecteerd", true);
   await mutate("PUT", "rooms", { rooms: [...rooms.values()] });
   toast(`${n} regel(s) geïmporteerd`);
+}
+
+// ---- stooklijn ----------------------------------------------------------------
+// Gasverbruik + graaddagen → warmteverliescoëfficiënt H → benodigde aanvoer per
+// buitentemperatuur. De server rekent; hier alleen invoer, grafieken en tabellen.
+
+const BASIS = {
+  auto: "Automatisch",
+  warmteverlies: "Warmteverliesberekening",
+  gas: "Gasverbruik",
+};
+const BASIS_USED = {
+  warmteverlies: "warmteverliesberekening (per ruimte)",
+  gas_geschaald: "warmteverliesberekening, geschaald naar het werkelijke gasverbruik",
+  gas: "gasverbruik, verdeeld over de elementen naar vermogen",
+};
+
+function renderHeating() {
+  const p = S.project, H = S.heating, g = H.gas, set = p.settings, view = $("#view");
+  const per = g.periods || [];
+  const num = (v, d) => (v === null || v === undefined ? "" : String(Math.round(v * 10 ** d) / 10 ** d).replace(".", ","));
+  const kv = [];
+  if (g.ok) {
+    kv.push(["Warmteverliescoëfficiënt H", `<b>${fmt(g.h_w_per_k, 0)} W/K</b>`]);
+    kv.push([`Warmtebehoefte bij ${fmt(set.outdoor_design_temp, 0)} °C`, `<b>${fmt(g.p_design_w / 1000, 1)} kW</b>`]);
+    if (H.rooms_loss_w) kv.push(["Warmteverliesberekening", `${fmt(H.rooms_loss_w / 1000, 1)} kW (× ${fmt(H.calc_vs_gas, 2)})`]);
+    kv.push(["Gas per graaddag", `${fmt(g.m3_per_dd, 3)} m³`]);
+    kv.push(["Verwarming", `${fmt(g.heating_m3_year, 0)} m³/jaar`]);
+    kv.push(["Warm water en koken", `${fmt(g.dhw_m3_year, 0)} m³/jaar${g.method === "regressie" ? " (uit de fit)" : g.method === "warm_water" ? " (ingesteld)" : " (niet bekend)"}`]);
+    if (g.r2 !== null && g.r2 !== undefined && g.method === "regressie") kv.push(["Fit (R²)", fmt(g.r2, 2)]);
+  }
+  const groups = H.groups.filter((x) => x.points);
+  const stations = H.stations.map(([id, n]) => `<option value="${id}" ${id === set.knmi_station ? "selected" : ""}>${esc(n)} (${id})</option>`).join("");
+  view.innerHTML = `
+    <div class="table-wrap heating">
+      <div class="round-actions">
+        <button class="btn primary" id="btn-gas-paste">Gasverbruik plakken (Excel)</button>
+        <button class="btn" id="btn-gas-add">+ Periode</button>
+        <label class="inline">KNMI-station<select name="knmi_station">${stations}</select></label>
+        <button class="btn" id="btn-knmi" ${per.length ? "" : "disabled"}>Graaddagen ophalen</button>
+        ${H.knmi.fetched ? `<span class="muted small">opgehaald ${fmtDate(H.knmi.fetched)} (${esc(H.knmi.name || "")})</span>` : ""}
+      </div>
+      <p class="muted small" style="max-width:980px">Uit het gasverbruik over een of meer jaren en de graaddagen in dezelfde perioden volgt
+        hoeveel warmte de woning echt nodig heeft per graad buitentemperatuur (H). Samen met de radiatoren en de
+        ontwerptemperatuur per ruimte (tabblad Warmteverlies) volgt daaruit de <b>stooklijn</b>: de aanvoertemperatuur die bij
+        elke buitentemperatuur nodig is. Neem bij voorkeur maandverbruik over minstens een jaar, inclusief de zomer (dan
+        scheidt de app warm water en koken zelf van de verwarming), uit een periode zonder grote verbouwingen.</p>
+      <div class="heat-grid">
+        <section class="card-panel">
+          <h3>Uitgangspunten</h3>
+          <div class="grid2 settings-inline">
+            <label>Ontwerp-buitentemperatuur (°C)<input name="outdoor_design_temp" inputmode="decimal" value="${num(set.outdoor_design_temp, 1)}"></label>
+            <label title="Boven deze buitentemperatuur is geen verwarming nodig; ook de basis van de graaddagen">Stookgrens (°C)<input name="heating_limit_temp" inputmode="decimal" value="${num(set.heating_limit_temp, 1)}"></label>
+            <label title="Bovenwaarde Gronings aardgas: 9,77 kWh/m³ (35,17 MJ/m³)">Verbrandingswaarde (kWh/m³)<input name="gas_kwh_per_m3" inputmode="decimal" value="${num(set.gas_kwh_per_m3, 2)}"></label>
+            <label title="Rendement van de cv-ketel op bovenwaarde; HR-ketel ca. 90 %, oude VR-ketel 75–80 %">Rendement ketel (%)<input name="boiler_efficiency" inputmode="decimal" value="${num(set.boiler_efficiency * 100, 0)}"></label>
+            <label title="Alleen nodig als de perioden geen zomer bevatten; anders volgt dit uit de fit">Warm water en koken (m³/jaar)<input name="dhw_gas_m3_year" inputmode="decimal" value="${num(set.dhw_gas_m3_year, 0)}" placeholder="uit de fit"></label>
+            <label>Lasten per element uit<select name="curve_basis">${Object.entries(BASIS).map(([k, l]) =>
+              `<option value="${k}" ${set.curve_basis === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+          </div>
+          <p class="muted small">Doel-ΔT bij ontwerp: radiatoren ${fmt(set.target_dt, 0)} K, vloerverwarming ${fmt(set.ufh_target_dt, 0)} K (⚙).</p>
+          ${kv.length ? `<h3>Resultaat gasverbruik</h3><dl class="kv">${kv.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>` : ""}
+        </section>
+        <section class="card-panel">
+          <h3>Verbruik tegen graaddagen</h3>
+          ${g.ok ? `<div class="chart" id="chart-gas"></div>
+            <p class="muted small">Elke stip is een periode (gemiddeld per dag). De lijn is de fit: snijpunt = warm water en
+              koken, helling = gas per graaddag. Stippen ver van de lijn wijzen op vakantie, een koude winter met open haard of
+              een fout in de invoer.</p>`
+            : `<p class="muted">Vul perioden met gasverbruik in en haal de graaddagen op.</p>`}
+        </section>
+      </div>
+      ${H.notes.map((n) => `<div class="notice warn">${esc(n)}</div>`).join("")}
+      <h3>Stooklijn</h3>
+      ${!H.basis ? `<div class="notice">Voor de stooklijn is nodig: het vermogen van de elementen, en óf een warmteverliesberekening
+          (tabblad Warmteverlies) óf het gasverbruik hierboven.</div>` : `<p class="small">Lasten uit de ${esc(BASIS_USED[H.basis] || H.basis)}${H.scale ? ` (factor ${fmt(H.scale, 2)})` : ""}.</p>`}
+      ${groups.length ? `<div class="heat-grid">
+        <section class="card-panel"><div class="chart" id="chart-curve"></div>
+          <p class="muted small">Doorgetrokken: benodigde aanvoer bij ingeregelde debieten en open thermostaatkranen. Gestippeld:
+            de rechte stooklijn door het ontwerppunt die nergens te laag is.</p></section>
+        <section class="card-panel">${groups.map(curveCard).join("")}</section>
+      </div>
+      <details><summary class="small">Tabel per graad buitentemperatuur</summary>
+        <table class="history"><thead><tr><th>Buiten °C</th>${groups.map((x) => `<th>${esc(x.label)} aanvoer</th><th>retour</th><th>last</th>`).join("")}</tr></thead>
+        <tbody>${groups[0].points.map((pt, i) => `<tr><td>${fmt(pt.t_out, 0)}</td>${groups.map((x) => {
+          const q = x.points[i];
+          return `<td>${fmt(q.supply, 1)}</td><td>${fmt(q.return, 1)}</td><td>${fmt(q.load_w, 0)} W</td>`;
+        }).join("")}</tr>`).join("")}</tbody></table></details>` : ""}
+      ${H.groups.filter((x) => x.unreachable).map((x) => `<div class="notice warn">${esc(x.label)}: ${esc(x.unreachable.join(", "))}
+        haalt de last zelfs bij ${fmt(110, 0)} °C aanvoer niet. Vergroot daar de afgifte; deze elementen tellen niet mee in de stooklijn.</div>`).join("")}
+      <h3>Perioden</h3>
+      <table class="round gas"><thead><tr><th>Van</th><th>Tot (niet t/m)</th><th>Gas m³</th><th>Graaddagen</th>
+        <th>Dagen</th><th>m³/dag</th><th>Graaddagen/dag</th><th></th></tr></thead>
+        <tbody id="gas-body">${per.map((r, i) => `<tr data-i="${i}">
+          <td><input name="start" type="date" value="${r.start}"></td>
+          <td><input name="end" type="date" value="${r.end}"></td>
+          <td><input name="gas_m3" inputmode="decimal" value="${num(r.gas_m3, 2)}"></td>
+          <td><input name="degree_days" inputmode="decimal" value="${r.dd_source === "handmatig" ? num(r.dd, 1) : ""}"
+            placeholder="${r.dd_source === "knmi" ? num(r.dd, 1) : "ophalen"}" title="Leeg = berekend uit KNMI-temperaturen"></td>
+          <td class="num">${r.days}</td><td class="num">${fmt(r.gas_per_day, 2)}</td>
+          <td class="num">${r.dd_per_day !== null ? fmt(r.dd_per_day, 1) : "–"}</td>
+          <td><button class="x" data-del-gas title="Periode verwijderen">✕</button></td></tr>`).join("")
+          || `<tr><td colspan="8" class="muted">Nog geen perioden.</td></tr>`}</tbody></table>
+    </div>`;
+
+  if (g.ok) $("#chart-gas").appendChild(gasChart(g));
+  if (groups.length) $("#chart-curve").appendChild(curveChart(groups));
+
+  // instellingen: direct opslaan
+  $$(".settings-inline input, .settings-inline select, .round-actions select", view).forEach((inp) => (inp.onchange = async () => {
+    let v = inp.tagName === "SELECT" ? inp.value : numOrNull(inp.value);
+    if (inp.tagName !== "SELECT" && inp.value.trim() !== "" && v === null) return toast("Ongeldig getal", true);
+    if (inp.name === "boiler_efficiency" && v !== null) v = v / 100;
+    if (inp.name === "knmi_station") v = Number(v);
+    await mutate("PUT", "", { settings: { [inp.name]: v } }).catch(() => {});
+  }));
+  const collect = () => $$("#gas-body tr[data-i]", view).map((tr) => ({
+    start: $("[name=start]", tr).value, end: $("[name=end]", tr).value,
+    gas_m3: numOrNull($("[name=gas_m3]", tr).value) ?? 0,
+    degree_days: numOrNull($("[name=degree_days]", tr).value),
+  }));
+  const save = (list) => mutate("PUT", "gas/periods", { periods: list }).catch(() => {});
+  $$("#gas-body input", view).forEach((inp) => (inp.onchange = () => {
+    if (inp.type !== "date" && inp.value.trim() !== "" && numOrNull(inp.value) === null) return toast("Ongeldig getal", true);
+    save(collect());
+  }));
+  $$("[data-del-gas]", view).forEach((b) => (b.onclick = () => {
+    const i = Number(b.closest("tr").dataset.i);
+    save(collect().filter((_, j) => j !== i));
+  }));
+  $("#btn-gas-add").onclick = () => {
+    const list = collect(), last = list[list.length - 1];
+    const start = last ? last.end : new Date(new Date().getFullYear() - 1, 0, 2).toISOString().slice(0, 10);
+    const d = new Date(start + "T12:00:00");
+    d.setMonth(d.getMonth() + 1);
+    save([...list, { start, end: d.toISOString().slice(0, 10), gas_m3: 0, degree_days: null }]);
+  };
+  $("#btn-gas-paste").onclick = pasteGas;
+  $("#btn-knmi").onclick = async () => {
+    toast("Graaddagen ophalen bij het KNMI…");
+    await mutate("POST", "gas/knmi").then(() => toast("Graaddagen bijgewerkt")).catch(() => {});
+  };
+  $$("[data-use-design]", view).forEach((b) => (b.onclick = async () => {
+    const settings = {};
+    for (const x of groups) settings[x.key === "vloer" ? "ufh_design_supply_temp" : "design_supply_temp"] = x.line.end;
+    settings.loss_factor = H.basis === "gas_geschaald" ? H.scale : null;
+    await mutate("PUT", "", { settings });
+    toast("Ontwerp-aanvoer ingesteld — zie het tabblad Warmteverlies");
+  }));
+}
+
+function curveCard(x) {
+  const L = x.line, set = S.project.settings;
+  const crit = (x.critical || []).slice(0, 3);
+  const cur = x.key === "vloer" ? set.ufh_design_supply_temp : set.design_supply_temp;
+  return `<h3 style="margin-top:0">${esc(x.label)}</h3>
+    <dl class="kv">
+      <dt>Ontwerppunt</dt><dd><b>${fmt(x.design_supply, 1)} °C</b> aanvoer, retour ~${fmt(x.design_return, 1)} °C bij ${fmt(L.t_design, 0)} °C buiten</dd>
+      <dt>Rechte stooklijn</dt><dd><b>${fmt(L.end, 1)} °C</b> bij ${fmt(L.t_design, 0)} °C → <b>${fmt(L.foot, 1)} °C</b> bij ${fmt(L.t_base, 0)} °C buiten
+        <br><span class="muted">helling ${fmt(L.slope, 2)} K per K; bij 0 °C buiten ${fmt(L.at_0, 1)} °C</span></dd>
+      <dt>Totaal debiet</dt><dd>${fmt(x.flow_total, 0)} l/h bij ontwerp</dd>
+    </dl>
+    ${crit.length ? `<p class="small" style="margin:8px 0 4px">Bepaald door:</p><ul class="crit small">${crit.map((c, i) => `<li>${esc(c.name)}${c.room ? ` <span class="muted">(${esc(c.room)}, ${fmt(c.theta, 0)} °C)</span>` : ""}:
+      ${fmt(c.supply, 1)} °C nodig voor ${fmt(c.q, 0)} W${i === 0 && x.second_supply ? ` <span class="muted">— zonder dit element ${fmt(x.second_supply, 1)} °C</span>` : ""}</li>`).join("")}</ul>` : ""}
+    <p><button class="btn small" data-use-design ${cur === L.end ? "disabled" : ""}>${cur === L.end ? `Ontwerp-aanvoer staat op ${fmt(L.end, 1)} °C` : `Gebruik ${fmt(L.end, 1)} °C als ontwerp-aanvoer`}</button></p>`;
+}
+
+async function pasteGas() {
+  const body = await dialog("Gasverbruik plakken", `
+    <p class="muted small">Kopieer kolommen uit Excel of een export van je energieleverancier / Home Assistant en plak ze hieronder.
+      Herkend worden: <b>meterstanden</b> (datum + stand), <b>verbruik per maand</b> (maand + m³, eventueel graaddagen) en
+      <b>perioden</b> (van + tot + m³, eventueel graaddagen).</p>
+    <textarea name="text" style="min-height:200px;font-family:monospace" placeholder="1-1-2024&#9;10250&#10;1-2-2024&#9;10512&#10;…"></textarea>
+    <label class="check"><input type="checkbox" name="replace" checked> Bestaande perioden vervangen</label>`, { ok: "Inlezen" });
+  if (!body) return;
+  try {
+    const res = await api("POST", `projects/${S.project.id}/gas/parse`, { text: $("[name=text]", body).value });
+    if (!res.periods.length) return toast("Geen perioden herkend", true);
+    const keep = $("[name=replace]", body).checked ? [] : S.project.gas_periods;
+    await mutate("PUT", "gas/periods", { periods: [...keep, ...res.periods] });
+    toast(res.message);
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---- grafieken (SVG, geen bibliotheek) ----------------------------------------
+
+function niceTicks(lo, hi, n = 5) {
+  const span = hi - lo || 1, raw = span / n, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => span / s <= n) || 10 * mag;
+  const a = Math.floor(lo / step + 1e-9) * step, b = Math.ceil(hi / step - 1e-9) * step;
+  const out = [];
+  for (let v = a; v <= b + step * 1e-6; v += step) out.push(Math.round(v * 1e6) / 1e6);
+  return { ticks: out, lo: a, hi: b };
+}
+
+// series: [{name, cls, pts: [[x, y]], dots?, dash?}]; hover: "x" (crosshair) of "nearest"
+function chart({ series, xLabel, yLabel, hover = "x", fmtX = (v) => fmt(v, 0), fmtY = (v) => fmt(v, 1), unitY = "", yFrom }) {
+  const W = 560, Hh = 300, m = { l: 48, r: 14, t: 12, b: 40 };
+  const all = series.flatMap((s) => s.pts);
+  const xs = niceTicks(Math.min(...all.map((p) => p[0])), Math.max(...all.map((p) => p[0])));
+  const ys = niceTicks(yFrom ?? Math.min(...all.map((p) => p[1])), Math.max(...all.map((p) => p[1])));
+  const X = (v) => m.l + (v - xs.lo) / (xs.hi - xs.lo || 1) * (W - m.l - m.r);
+  const Y = (v) => Hh - m.b - (v - ys.lo) / (ys.hi - ys.lo || 1) * (Hh - m.t - m.b);
+  const svgNS = "http://www.w3.org/2000/svg";
+  const wrap = document.createElement("div");
+  wrap.className = "chart-wrap";
+  const legend = series.length > 1 ? `<div class="chart-legend">${series.map((s) =>
+    `<span><i class="${s.cls}${s.dash ? " dash" : ""}${s.dots ? " dotmark" : ""}"></i>${esc(s.name)}</span>`).join("")}</div>` : "";
+  wrap.innerHTML = `${legend}<svg viewBox="0 0 ${W} ${Hh}" class="chart-svg" role="img" aria-label="${esc(yLabel)} tegen ${esc(xLabel)}">
+    ${ys.ticks.map((t) => `<line class="grid" x1="${m.l}" x2="${W - m.r}" y1="${Y(t)}" y2="${Y(t)}"/>
+      <text class="tick" x="${m.l - 6}" y="${Y(t) + 4}" text-anchor="end">${esc(fmtY(t))}</text>`).join("")}
+    ${xs.ticks.map((t) => `<text class="tick" x="${X(t)}" y="${Hh - m.b + 16}" text-anchor="middle">${esc(fmtX(t))}</text>`).join("")}
+    <line class="axis" x1="${m.l}" x2="${W - m.r}" y1="${Hh - m.b}" y2="${Hh - m.b}"/>
+    <text class="tick" x="${(m.l + W - m.r) / 2}" y="${Hh - 6}" text-anchor="middle">${esc(xLabel)}</text>
+    <text class="tick" x="12" y="${(m.t + Hh - m.b) / 2}" text-anchor="middle" transform="rotate(-90 12 ${(m.t + Hh - m.b) / 2})">${esc(yLabel)}</text>
+    ${series.map((s) => s.dots
+      ? s.pts.map((p) => `<circle class="dot ${s.cls}" cx="${X(p[0])}" cy="${Y(p[1])}" r="4.5"/>`).join("")
+      : `<polyline class="ln ${s.cls}${s.dash ? " dash" : ""}" points="${s.pts.map((p) => `${X(p[0])},${Y(p[1])}`).join(" ")}"/>`).join("")}
+    <line class="cross" y1="${m.t}" y2="${Hh - m.b}" visibility="hidden"/>
+    <rect class="hit" x="${m.l}" y="${m.t}" width="${W - m.l - m.r}" height="${Hh - m.t - m.b}"/>
+  </svg><div class="tip" hidden></div>`;
+  const svg = $("svg", wrap), tip = $(".tip", wrap), cross = $(".cross", wrap);
+  const show = (ev) => {
+    const r = svg.getBoundingClientRect(), k = W / r.width;
+    const px = (ev.clientX - r.left) * k, py = (ev.clientY - r.top) * k;
+    tip.replaceChildren();
+    const line = (txt, cls) => { const d = document.createElement("div"); if (cls) d.className = cls; d.textContent = txt; tip.appendChild(d); };
+    let ax;
+    if (hover === "nearest") {
+      let best = null;
+      for (const s of series) for (const p of s.pts) {
+        if (!s.dots) continue;
+        const d = Math.hypot(X(p[0]) - px, Y(p[1]) - py);
+        if (!best || d < best.d) best = { d, p, s };
+      }
+      if (!best || best.d > 40) { tip.hidden = true; cross.setAttribute("visibility", "hidden"); return; }
+      ax = X(best.p[0]);
+      line(`${xLabel}: ${fmtX(best.p[0])}`, "muted");
+      line(`${yLabel}: ${fmtY(best.p[1])}${unitY}`);
+      if (best.p[2]) line(best.p[2], "muted");
+    } else {
+      const xsAll = series[0].pts.map((p) => p[0]);
+      const x0 = xsAll.reduce((a, b) => (Math.abs(X(b) - px) < Math.abs(X(a) - px) ? b : a));
+      ax = X(x0);
+      line(`${xLabel}: ${fmtX(x0)}`, "muted");
+      for (const s of series) {
+        const p = s.pts.find((q) => Math.abs(q[0] - x0) < 1e-6);
+        if (p) line(`${s.name}: ${fmtY(p[1])}${unitY}`);
+      }
+    }
+    cross.setAttribute("x1", ax); cross.setAttribute("x2", ax); cross.setAttribute("visibility", "visible");
+    tip.hidden = false;
+    const left = ax / k;
+    tip.style.left = Math.min(left + 12, r.width - tip.offsetWidth - 4) + "px";
+    tip.style.top = Math.max(0, (py / k) - 20) + "px";
+  };
+  const hit = $(".hit", wrap);
+  hit.addEventListener("pointermove", show);
+  hit.addEventListener("pointerleave", () => { tip.hidden = true; cross.setAttribute("visibility", "hidden"); });
+  return wrap;
+}
+
+function gasChart(g) {
+  const pts = g.periods.filter((r) => r.dd_per_day !== null)
+    .map((r) => [r.dd_per_day, r.gas_per_day, `${fmtDay(r.start)} – ${fmtDay(r.end)}: ${fmt(r.gas_m3, 0)} m³`]);
+  const xmax = Math.max(...pts.map((p) => p[0]), 1);
+  return chart({
+    series: [{ name: "Periode", cls: "s1", dots: true, pts },
+      { name: "Fit", cls: "neutral", dash: true, pts: [[0, g.base_m3_day], [xmax, g.base_m3_day + g.m3_per_dd * xmax]] }],
+    xLabel: "graaddagen per dag", yLabel: "m³ gas per dag", hover: "nearest",
+    fmtX: (v) => fmt(v, 1), fmtY: (v) => fmt(v, 1), unitY: " m³", yFrom: 0,
+  });
+}
+function fmtDay(iso) { return new Date(iso + "T12:00:00").toLocaleDateString("nl-NL", { day: "numeric", month: "short", year: "numeric" }); }
+
+function curveChart(groups) {
+  const series = [];
+  groups.forEach((x, i) => {
+    const cls = i === 0 ? "s1" : "s2";
+    series.push({ name: `${x.label} benodigd`, cls, pts: x.points.map((p) => [p.t_out, p.supply]) });
+    series.push({ name: `${x.label} rechte lijn`, cls, dash: true,
+      pts: x.points.map((p) => [p.t_out, x.line.end + (x.line.foot - x.line.end) * (p.t_out - x.line.t_design) / (x.line.t_base - x.line.t_design)]) });
+  });
+  return chart({ series, xLabel: "buitentemperatuur °C", yLabel: "aanvoer °C", unitY: " °C", yFrom: 15 });
 }
 
 // ---- plattegronden uploaden -------------------------------------------------
