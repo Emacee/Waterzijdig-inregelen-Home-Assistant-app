@@ -21,7 +21,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from . import __version__
-from .balance import DEFAULT_SETTINGS, analyze, settings_of, supply_temp_for
+from . import heatloss
+from .balance import DEFAULT_SETTINGS, analyze, norm_room, settings_of, supply_temp_for
 from .schema import COMPONENT_LABELS, COMPONENT_TYPES, build_schema
 from .store import NotFound, Store, find, new_id, now_iso
 
@@ -98,6 +99,8 @@ class Settings(_M):
     room_temp: Optional[float] = Field(None, ge=0, le=35)
     supply_temp: Optional[float] = Field(None, ge=20, le=95)
     ufh_supply_temp: Optional[float] = Field(None, ge=20, le=95)
+    design_supply_temp: Optional[float] = Field(None, ge=20, le=95)
+    ufh_design_supply_temp: Optional[float] = Field(None, ge=20, le=95)
     tolerance_pct: Optional[float] = Field(None, ge=0, le=100)
     keep_total_flow: Optional[bool] = None
     method: Optional[Literal["auto", "dt"]] = None
@@ -143,6 +146,17 @@ class EmitterIn(_M):
     valve_type: Optional[str] = Field(None, max_length=40)
     preset: Optional[float] = Field(None, ge=0, le=1000)
     notes: Optional[str] = Field(None, max_length=5000)
+
+
+class RoomIn(_M):
+    id: Optional[str] = Field(None, max_length=32, pattern=r"^[0-9a-f]+$")
+    name: str = Field(..., min_length=1, max_length=100)
+    temp: Optional[float] = Field(None, ge=5, le=30)          # ontwerp-binnentemperatuur [°C]
+    loss_w: Optional[float] = Field(None, ge=0, le=100000)    # warmteverlies [W]
+
+
+class RoomsIn(_M):
+    rooms: List[RoomIn] = Field(..., max_length=300)
 
 
 class PipeIn(_M):
@@ -260,7 +274,9 @@ async def export_csv(pid: str):
     w = csv.writer(buf, delimiter=";")
     w.writerow(["Plattegrond", "Ruimte", "Naam", "Type", "Vermogen (W)", "Warmtevraag (W)",
                 "Ventiel", "Stand", "Gemeten op", "Aanvoer", "Retour", "Ruimte °C", "ΔT",
-                "Debiet (l/h)", "Doeldebiet (l/h)", "Factor", "Advies stand", "Advies"])
+                "Debiet (l/h)", "Doeldebiet (l/h)", "Factor", "Advies stand", "Advies",
+                "Ontwerptemp. ruimte", "Warmteverlies deel (W)", "Ontwerpretour",
+                "Ontwerpdebiet (l/h)"])
     for e in p["emitters"]:
         r = a.get(e["id"], {})
         w.writerow(_cells([fps.get(e.get("floorplan_id"), ""), e.get("room", ""), e.get("name", ""),
@@ -269,7 +285,9 @@ async def export_csv(pid: str):
                     r.get("measured_at", ""), r.get("t_in", ""), r.get("t_out", ""),
                     r.get("t_room", ""), r.get("dt", ""), _r(r.get("flow_act")),
                     _r(r.get("flow_target")), _r(r.get("ratio"), 2),
-                    r.get("preset_advice_label", ""), r.get("advice", "")]))
+                    r.get("preset_advice_label", ""), r.get("advice", ""),
+                    _r(r.get("room_temp"), 1), _r(r.get("design_q")),
+                    _r(r.get("design_t_out"), 1), _r(r.get("design_flow"))]))
     b = analysis["summary"]["boiler"]
     if b:
         w.writerow(["", "", "Warmtebron", p["settings"].get("heat_source", ""), "", "", "", "", b.get("ts", ""), b.get("t_in", ""),
@@ -352,6 +370,74 @@ async def rename_floorplan(pid: str, fid: str, body: FloorplanUpdate):
 @app.delete("/api/projects/{pid}/floorplans/{fid}")
 async def delete_floorplan(pid: str, fid: str):
     return _out(store.delete_floorplan(pid, fid))
+
+
+# ---- warmteverliesberekening ---------------------------------------------------
+
+def _match_room(name: str, app_rooms: Dict[str, str]) -> Optional[str]:
+    """Beste ruimtenaam uit de app voor een naam uit de berekening (of None)."""
+    key = norm_room(name)
+    if key in app_rooms:
+        return app_rooms[key]
+    # "0.1 Woonkamer" / "Woonkamer (bg)" ↔ "Woonkamer": zelfde woorden zonder codes
+    words = {w for w in key.split() if not w.isdigit()}
+    best, score = None, 0.0
+    for k, label in app_rooms.items():
+        other = {w for w in k.split() if not w.isdigit()}
+        digits = {w for w in k.split() if w.isdigit()}
+        if not other or not words:
+            continue
+        # "slaapkamer 1" mag niet op "slaapkamer 2" vallen
+        if digits and not digits <= set(key.split()):
+            continue
+        s = len(words & other) / len(words | other)
+        if (other <= words or words <= other) and s > score:
+            best, score = label, s
+    return best
+
+
+@app.post("/api/projects/{pid}/heatloss/parse")
+async def parse_heatloss(pid: str, file: UploadFile = File(...), kind: str = Form("")):
+    """Lees een warmteverliesberekening en geef een voorstel terug; er wordt niets opgeslagen."""
+    p = store.get(pid)
+    data = await file.read(MAX_UPLOAD + 1)
+    if len(data) > MAX_UPLOAD:
+        raise HTTPException(413, f"Bestand groter dan {MAX_UPLOAD // 1024 // 1024} MB")
+    try:
+        rooms = heatloss.parse(data, headerless=kind == "pdf")
+    except ValueError as exc:
+        raise HTTPException(415, str(exc)) from exc
+    app_rooms: Dict[str, str] = {}
+    for e in p["emitters"]:
+        if norm_room(e.get("room")):
+            app_rooms.setdefault(norm_room(e["room"]), e["room"].strip())
+    used = set()
+    for r in rooms:
+        m = _match_room(r["name"], app_rooms)
+        r["match"] = m if m and m not in used else None
+        if r["match"]:
+            used.add(m)
+    return {"rooms": rooms, "app_rooms": sorted(app_rooms.values())}
+
+
+@app.put("/api/projects/{pid}/rooms")
+async def set_rooms(pid: str, body: RoomsIn):
+    """Vervang de ruimtes uit de warmteverliesberekening (de UI stuurt steeds de hele lijst)."""
+    p = store.get(pid)
+    known = {r["id"] for r in p["rooms"]}
+    seen, rooms = set(), []
+    for r in body.rooms:
+        name = " ".join(r.name.split())
+        key = norm_room(name)
+        if not key:
+            raise HTTPException(422, "Een ruimte heeft een naam nodig")
+        if key in seen:
+            raise HTTPException(422, f"Ruimte '{name}' staat er dubbel in")
+        seen.add(key)
+        rooms.append({"id": r.id if r.id in known else new_id(), "name": name,
+                      "temp": r.temp, "loss_w": r.loss_w})
+    p["rooms"] = rooms
+    return _out(store.save(p))
 
 
 # ---- leidingverloop ----------------------------------------------------------

@@ -166,7 +166,7 @@ label.check input { width: auto; margin: 0; }
 .marker[class*="st-"] .ic { background: var(--st); }
 .marker.st-ongeldig { border-style: dashed; }
 
-.ghost {
+.marker.ghost {
   position: fixed; z-index: 100; pointer-events: none; transform: translate(-50%, -50%);
   opacity: .9;
 }
@@ -227,6 +227,21 @@ label.check input { width: auto; margin: 0; }
 .round .status { display: flex; gap: 6px; align-items: center; }
 .round .status .dot { width: 10px; height: 10px; border-radius: 50%; background: var(--st, var(--none)); flex-shrink: 0; }
 .round-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; align-items: center; }
+
+/* ---- warmteverlies (ruimtes) ---- */
+.rooms { margin-bottom: 16px; }
+.rooms tr.room td { background: var(--bg); }
+.rooms tr.room input[name=name] { width: 200px; font-weight: 600; }
+.rooms tr.sub td:first-child { padding-left: 22px; }
+.rooms a { color: inherit; }
+.rooms .warn-text { color: var(--open); }
+label.inline { display: flex; align-items: center; gap: 6px; margin: 0; }
+label.inline input { width: 80px; margin: 0; }
+.imp input { width: 70px; padding: 4px 6px; }
+.imp input[type=checkbox] { width: auto; }
+.imp select { min-width: 150px; padding: 4px 6px; }
+.imp td:nth-child(2), .imp th:nth-child(2) { text-align: left; }
+dialog.wide { width: min(820px, calc(100vw - 24px)); }
 
 /* ---- dialoog / toast ---- */
 dialog {

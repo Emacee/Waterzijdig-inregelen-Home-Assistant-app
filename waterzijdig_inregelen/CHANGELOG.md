@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.3.0
+- Nieuw tabblad **Warmteverlies**: ruimtes uit de warmteverliesberekening met
+  ontwerptemperatuur en warmteverlies. Upload de berekening als CSV, Excel (.xlsx) of PDF
+  (tekst-PDF); de app herkent de ruimtes, koppelt ze op naam aan de ruimtes van de
+  elementen en laat je alles controleren voordat het wordt opgeslagen.
+- Per element een **ontwerpretour** en **ontwerpdebiet**: de retourtemperatuur waarbij het
+  element bij de ontwerp-aanvoer precies zijn deel van het warmteverlies afgeeft bij de
+  ontwerptemperatuur van zijn eigen ruimte. Meerdere elementen in één ruimte delen het
+  warmteverlies naar vermogen.
+- Inregelen **op ontwerpdebiet**: als de berekening voor alle gemeten elementen compleet is,
+  is het advies ontwerpdebiet / huidig debiet. De doelretour in de meetronde schuift mee met
+  de gemeten aanvoer- en ruimtetemperatuur.
+- Nieuwe projectinstellingen *ontwerp-aanvoer radiatoren* en *vloerverwarming* (leeg = de
+  cv-temperatuur).
+- Een niet gemeten ruimtetemperatuur valt terug op de ontwerptemperatuur van de ruimte.
+- Meetronde met kolom **Doelretour**; CSV-export met ontwerptemperatuur, aandeel
+  warmteverlies, ontwerpretour en ontwerpdebiet.
+
 ## 0.2.1
 - Meetronde: aanvoer en retour **bij de warmtebron** in te vullen; bij een cv-ketel volgt
   een waarschuwing als het ΔT daar boven de 20 K komt (kans op storing). Staat ook in het

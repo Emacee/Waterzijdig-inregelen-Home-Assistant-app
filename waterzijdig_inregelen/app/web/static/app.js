@@ -105,6 +105,14 @@ function supplyFor(em) {
   const s = S.project.settings;
   return em.type === "vloerverwarming" && s.ufh_supply_temp != null ? s.ufh_supply_temp : s.supply_temp ?? null;
 }
+// Zelfde normalisatie als de server (balance.norm_room): hoofdletters en leestekens tellen niet.
+const normRoom = (v) => String(v ?? "").toLowerCase().replace(/[^\p{L}\p{N}_]+/gu, " ").trim().replace(/\s+/g, " ");
+function roomNames() {
+  const seen = new Map();
+  for (const r of S.project.rooms || []) seen.set(normRoom(r.name), r.name);
+  for (const e of S.project.emitters) if (normRoom(e.room) && !seen.has(normRoom(e.room))) seen.set(normRoom(e.room), e.room.trim());
+  return [...seen.values()].sort((a, b) => a.localeCompare(b, "nl"));
+}
 function valveOf(em) { return S.project.valve_types.find((v) => v.id === em.valve_type); }
 function presetLabel(valve, s) {
   if (s === null || s === undefined) return "–";
@@ -114,8 +122,9 @@ function presetLabel(valve, s) {
 
 // ---- dialoog --------------------------------------------------------------
 
-function dialog(title, bodyHtml, { ok = "Opslaan", onOpen } = {}) {
+function dialog(title, bodyHtml, { ok = "Opslaan", onOpen, wide = false } = {}) {
   const dlg = $("#dlg");
+  dlg.classList.toggle("wide", wide);
   $("#dlg-title").textContent = title;
   $("#dlg-body").innerHTML = bodyHtml;
   $("#dlg-ok").textContent = ok;
@@ -210,6 +219,7 @@ function renderProject() {
   $("#top-actions").innerHTML = `
     <button class="btn ${S.mode === "plan" ? "primary" : ""}" data-mode="plan">Plattegrond</button>
     <button class="btn ${S.mode === "table" ? "primary" : ""}" data-mode="table">Meetronde</button>
+    <button class="btn ${S.mode === "rooms" ? "primary" : ""}" data-mode="rooms" title="Ruimtes uit de warmteverliesberekening: ontwerptemperatuur, warmteverlies en ontwerpretour">Warmteverlies</button>
     <button class="btn ${S.mode === "schema" ? "primary" : ""}" data-mode="schema">Schema</button>
     <a class="btn" href="api/projects/${p.id}/export.csv" download>CSV</a>
     <button class="icon-btn" id="btn-settings" title="Projectinstellingen">⚙</button>`;
@@ -217,6 +227,7 @@ function renderProject() {
   $("#btn-settings").onclick = editSettings;
   if (S.mode === "table") renderTable();
   else if (S.mode === "schema") renderSchema();
+  else if (S.mode === "rooms") renderRooms();
   else renderPlan();
 }
 
@@ -543,8 +554,9 @@ function summaryHtml() {
   const pills = ["ok", "open", "dicht", "ongeldig", "geen_meting"].filter((k) => c[k])
     .map((k) => `<span class="pill st-${k}"><span class="dot"></span>${c[k]} ${STATUS[k].text.toLowerCase()}</span>`).join("");
   const groups = s.groups.map((g) => `
-    <dt>${esc(g.label)}</dt><dd>${g.method === "vraag" ? "op warmtevraag" : `gelijk ΔT, doel ${fmt(g.target_dt, 1)} K`}
-      ${g.supply_temp != null ? `<br>cv ${fmt(g.supply_temp, 0)} °C → doelretour ${fmt(g.target_t_out, 1)} °C` : ""}
+    <dt>${esc(g.label)}</dt><dd>${g.method === "ontwerp" ? `op ontwerpdebiet (warmteverliesberekening), ontwerp-aanvoer ${fmt(g.design_supply, 0)} °C`
+        : g.method === "vraag" ? "op warmtevraag" : `gelijk ΔT, doel ${fmt(g.target_dt, 1)} K`}
+      ${g.method === "dt" && g.supply_temp != null ? `<br>cv ${fmt(g.supply_temp, 0)} °C → doelretour ${fmt(g.target_t_out, 1)} °C` : ""}
       ${g.dt_mean !== undefined ? `<br>gemeten gem. ΔT ${fmt(g.dt_mean, 1)} K${g.dt_weighted !== undefined ? ` (debietgewogen ${fmt(g.dt_weighted, 1)} K)` : ""}` : ""}
       ${g.flow_total !== undefined ? `<br>${fmt(g.flow_total, 0)} l/h · ${fmt(g.q_total / 1000, 1)} kW` : ""}
       <span class="muted">· ${g.measured}/${g.members} gemeten</span></dd>`).join("");
@@ -611,12 +623,14 @@ function emitterPanelHtml(em) {
         ${r.ratio !== undefined ? `<dt>Debietfactor</dt><dd>× ${fmt(r.ratio, 2)}</dd>` : ""}
         ${r.flow_act ? `<dt>Debiet</dt><dd>${fmt(r.flow_act, 0)} → ${fmt(r.flow_target, 0)} l/h</dd>` : ""}
         ${r.q_act ? `<dt>Afgifte</dt><dd>${fmt(r.q_act, 0)} W${r.q_target ? ` → doel ${fmt(r.q_target, 0)} W` : ""}</dd>` : ""}
-        ${r.target_t_out !== undefined ? `<dt>Doelretour</dt><dd>${fmt(r.target_t_out, 1)} °C</dd>` : ""}
+        ${r.target_t_out !== undefined ? `<dt>Doelretour</dt><dd>${fmt(r.target_t_out, 1)} °C${r.design_flow && S.analysis.summary.groups.some((g) => g.method === "ontwerp" && g.key === (isUfh ? "vloer" : "rad")) ? ` <span class="muted">bij deze aanvoer en ${fmt(r.t_room, 1)} °C ruimte</span>` : ""}</dd>` : ""}
         <dt>Gemeten op</dt><dd>${fmtDate(r.measured_at)}</dd>
       </dl>` : ""}
       ${r.warnings?.length ? `<ul>${r.warnings.map((w) => `<li>${esc(w)}</li>`).join("")}</ul>` : ""}
       ${canApply ? `<button class="btn primary" id="btn-apply" style="margin-top:10px">Stand ${esc(r.preset_advice_label)} ingesteld</button>` : ""}
     </div>
+
+    ${designHtml(em, r)}
 
     <h3>Nieuwe meting</h3>
     <form id="meas" class="grid3" autocomplete="off">
@@ -624,7 +638,7 @@ function emitterPanelHtml(em) {
         ? `<label>Aanvoer °C<input name="t_in" inputmode="decimal" placeholder="cv ${fmt(supply, 0)}" title="Leeg = cv-temperatuur uit de projectinstellingen"></label>`
         : `<label>Aanvoer °C<input name="t_in" inputmode="decimal" required></label>`}
       <label>Retour °C<input name="t_out" inputmode="decimal" required></label>
-      <label>Ruimte °C<input name="t_room" inputmode="decimal" placeholder="${fmt(set.room_temp, 1)}"></label>
+      <label>Ruimte °C<input name="t_room" inputmode="decimal" placeholder="${fmt(r.room_temp ?? set.room_temp, 1)}"></label>
       <div style="grid-column:1/-1"><button class="btn primary" style="width:100%">Opslaan &amp; herberekenen</button></div>
     </form>
     <p class="muted small">Huidige stand bij deze meting: <b>${esc(presetLabel(valve, em.preset))}</b>
@@ -633,7 +647,9 @@ function emitterPanelHtml(em) {
     <h3>Gegevens</h3>
     <div class="grid2">
       <label>Naam<input name="name" value="${esc(em.name)}"></label>
-      <label>Ruimte<input name="room" value="${esc(em.room || "")}" placeholder="bijv. Woonkamer"></label>
+      <label>Ruimte<input name="room" value="${esc(em.room || "")}" placeholder="bijv. Woonkamer" list="room-names"
+        title="Dezelfde naam als in het tabblad Warmteverlies koppelt het element aan die ruimte"></label>
+      <datalist id="room-names">${roomNames().map((n) => `<option value="${esc(n)}">`).join("")}</datalist>
       <label>Type<select name="type">${Object.entries(TYPES).map(([k, t]) =>
         `<option value="${k}" ${k === em.type ? "selected" : ""}>${t.label}</option>`).join("")}</select></label>
       <label>Plattegrond<select name="floorplan_id">${p.floorplans.map((f) =>
@@ -661,6 +677,25 @@ function emitterPanelHtml(em) {
       : `<p class="muted">Nog geen metingen.</p>`}
 
     <p style="margin-top:24px"><button class="btn danger" id="btn-del">Element verwijderen</button></p>`;
+}
+
+// Ontwerpwaarden uit de warmteverliesberekening voor één element.
+function designHtml(em, r) {
+  if (!(S.project.rooms || []).length) return "";
+  const room = S.analysis.rooms.rooms.find((x) => x.id === r.room_id);
+  if (!room) {
+    return `<h3>Ontwerp (warmteverliesberekening)</h3>
+      <p class="muted small">${em.room ? `Ruimte '${esc(em.room)}' staat niet in het tabblad Warmteverlies.`
+        : "Vul bij Gegevens de ruimte in om dit element aan de warmteverliesberekening te koppelen."}</p>`;
+  }
+  return `<h3>Ontwerp (warmteverliesberekening)</h3>
+    <dl class="kv">
+      <dt>Ruimte</dt><dd>${esc(room.name)}: ${fmt(r.room_temp, 1)} °C${room.loss_w ? `, warmteverlies ${fmt(room.loss_w, 0)} W` : ""}</dd>
+      ${r.design_q ? `<dt>Aandeel</dt><dd>${fmt(r.design_q, 0)} W${room.emitters.length > 1 ? ` <span class="muted">(${room.emitters.length} elementen in deze ruimte)</span>` : ""}</dd>` : ""}
+      ${r.design_t_out !== undefined ? `<dt>Ontwerpretour</dt><dd><b>${fmt(r.design_t_out, 1)} °C</b> bij ${fmt(r.design_supply, 0)} °C aanvoer (ΔT ${fmt(r.design_supply - r.design_t_out, 1)} K)</dd>
+        <dt>Ontwerpdebiet</dt><dd>${fmt(r.design_flow, 0)} l/h</dd>` : ""}
+    </dl>
+    ${room.warnings.length ? `<div class="notice warn">${room.warnings.map(esc).join("<br>")}</div>` : ""}`;
 }
 
 function stepsHint(valve) {
@@ -716,7 +751,7 @@ function bindEmitterPanel(side, em) {
 function renderTable() {
   const p = S.project, view = $("#view");
   const rows = [], b = S.analysis.summary.boiler || {};
-  rows.push(`<tr class="group"><td colspan="9">Warmtebron</td></tr>
+  rows.push(`<tr class="group"><td colspan="10">Warmtebron</td></tr>
     <tr data-id="boiler">
       <td><b>${esc({ ketel: "Cv-ketel", warmtepomp: "Warmtepomp" }[p.settings.heat_source] || "Warmtebron")}</b>
         <div class="muted small">aanvoer/retour bij de bron zelf (optioneel)</div></td>
@@ -724,14 +759,14 @@ function renderTable() {
       <td><input name="t_in" inputmode="decimal" placeholder="${b.t_in ?? ""}"></td>
       <td><input name="t_out" inputmode="decimal" placeholder="${b.t_out ?? ""}"></td>
       <td><input name="t_room" type="hidden"></td>
-      <td class="num">${b.dt !== undefined ? fmt(b.dt, 1) : "–"}</td><td></td><td></td>
+      <td class="num">${b.dt !== undefined ? fmt(b.dt, 1) : "–"}</td><td></td><td></td><td></td>
       <td><div class="status ${b.warning ? "st-open" : b.dt !== undefined ? "st-ok" : "st-geen_meting"}"><span class="dot"></span>
         <span>${b.warning ? esc(b.warning) : b.dt !== undefined ? "ΔT bij de bron binnen de grens" : ""}</span></div></td>
     </tr>`);
   for (const fp of p.floorplans) {
     const ems = p.emitters.filter((e) => e.floorplan_id === fp.id);
     if (!ems.length) continue;
-    rows.push(`<tr class="group"><td colspan="9">${esc(fp.name)}</td></tr>`);
+    rows.push(`<tr class="group"><td colspan="10">${esc(fp.name)}</td></tr>`);
     for (const e of ems) {
       const r = result(e.id), st = r.status || "geen_meting", valve = valveOf(e);
       rows.push(`<tr data-id="${e.id}">
@@ -739,7 +774,9 @@ function renderTable() {
         <td><input name="preset" inputmode="decimal" value="${e.preset ?? ""}" title="${valve ? esc(valve.name) : "Geen ventieltype"}"></td>
         <td><input name="t_in" inputmode="decimal" placeholder="${supplyFor(e) !== null ? `cv ${fmt(supplyFor(e), 0)}` : r.t_in ?? ""}"></td>
         <td><input name="t_out" inputmode="decimal" placeholder="${r.t_out ?? ""}"></td>
-        <td><input name="t_room" inputmode="decimal" placeholder="${r.t_room ?? fmt(p.settings.room_temp, 1)}"></td>
+        <td><input name="t_room" inputmode="decimal" placeholder="${r.t_room ?? fmt(r.room_temp ?? p.settings.room_temp, 1)}"></td>
+        <td class="num" title="${r.target_t_out === undefined && r.design_t_out !== undefined ? `Ontwerpretour bij ${fmt(r.design_supply, 0)} °C aanvoer` : "Retour waarop dit element bij deze aanvoer uit moet komen"}">${r.target_t_out !== undefined ? fmt(r.target_t_out, 1)
+          : r.design_t_out !== undefined ? `<span class="muted">${fmt(r.design_t_out, 1)}</span>` : "–"}</td>
         <td class="num">${r.dt !== undefined ? fmt(r.dt, 1) : "–"}</td>
         <td class="num">${r.ratio !== undefined ? "× " + fmt(r.ratio, 2) : "–"}</td>
         <td class="num"><b>${(st === "open" || st === "dicht") && r.preset_advice_label ? esc(r.preset_advice_label) : "–"}</b></td>
@@ -761,7 +798,7 @@ function renderTable() {
       <div class="side" style="width:auto;max-width:none;border:none;padding:0 0 12px;background:none">${summaryHtml()}</div>
       ${rows.length ? `<table class="round"><thead><tr>
           <th>Element</th><th>Stand</th><th>Aanvoer °C</th><th>Retour °C</th><th>Ruimte °C</th>
-          <th>ΔT</th><th>Factor</th><th>Nieuwe stand</th><th>Advies</th></tr></thead>
+          <th>Doelretour</th><th>ΔT</th><th>Factor</th><th>Nieuwe stand</th><th>Advies</th></tr></thead>
         <tbody>${rows.join("")}</tbody></table>`
       : `<p class="muted">Nog geen elementen. Plaats ze eerst op de plattegrond.</p>`}
     </div>`;
@@ -823,6 +860,216 @@ function restoreRound(pending) {
     const tr = $(`.round tr[data-id="${p.id}"]`);
     if (tr) ["t_in", "t_out", "t_room"].forEach((n, i) => ($(`[name=${n}]`, tr).value = p.v[i]));
   }
+}
+
+// ---- warmteverlies (ruimtes) ------------------------------------------------
+// Ruimtes uit de warmteverliesberekening: ontwerptemperatuur en warmteverlies per ruimte.
+// Elementen horen bij een ruimte via hun ruimtenaam; de server rekent de ontwerpretour uit.
+
+function renderRooms() {
+  const p = S.project, A = S.analysis.rooms, set = p.settings, view = $("#view");
+  const info = new Map(A.rooms.map((r) => [r.id, r]));
+  const emRows = (ems) => ems.map((e) => {
+    const r = result(e.id), nom = (e.type === "vloerverwarming" ? set.ufh_nominal : set.radiator_nominal).join("/");
+    return `<tr class="sub" data-em="${e.id}">
+      <td><a href="#" data-open="${e.id}" title="Openen op de plattegrond">↳ ${esc(e.name)}</a>
+        <span class="muted small">${esc(TYPES[e.type]?.label || "")}</span></td>
+      <td></td>
+      <td class="num">${r.design_q ? fmt(r.design_q, 0) : "–"}</td>
+      <td><input name="power_w" inputmode="decimal" value="${e.power_w ?? ""}" placeholder="W" title="Vermogen bij ${nom}"></td>
+      <td class="num"><b>${r.design_t_out !== undefined ? fmt(r.design_t_out, 1) : r.design_sat ? "max. open" : "–"}</b></td>
+      <td class="num">${r.design_t_out !== undefined ? fmt(r.design_supply - r.design_t_out, 1) : "–"}</td>
+      <td class="num">${r.design_flow ? fmt(r.design_flow, 0) : "–"}</td>
+      <td class="muted small">${r.design_supply != null && r.design_q ? `bij ${fmt(r.design_supply, 0)} °C aanvoer` : ""}</td><td></td></tr>`;
+  }).join("");
+  const roomRow = (room, ems, extra = "") => {
+    const i = info.get(room.id) || { warnings: [] };
+    const flow = ems.reduce((t, e) => t + (result(e.id).design_flow || 0), 0);
+    return `<tr class="room" data-room="${esc(room.id || "")}" ${room.id ? "" : "data-new"}>
+      <td><input name="name" value="${esc(room.name)}" placeholder="Naam van de ruimte" maxlength="100"></td>
+      <td><input name="temp" inputmode="decimal" value="${room.temp ?? ""}" placeholder="${fmt(set.room_temp, 0)}"></td>
+      <td><input name="loss_w" inputmode="decimal" value="${room.loss_w ?? ""}" placeholder="W"></td>
+      <td></td><td></td><td></td>
+      <td class="num">${flow ? fmt(flow, 0) : ""}</td>
+      <td class="small">${extra}${i.warnings.map((w) => `<div class="warn-text">${esc(w)}</div>`).join("")}</td>
+      <td>${room.id ? `<button class="x" data-del-room title="Ruimte verwijderen">✕</button>` : ""}</td></tr>${emRows(ems)}`;
+  };
+  const emsOf = (name) => p.emitters.filter((e) => normRoom(e.room) === normRoom(name));
+  const body = [
+    ...(p.rooms || []).map((room) => roomRow(room, emsOf(room.name))),
+    ...A.unmatched.map((name) => roomRow({ name, temp: null, loss_w: null }, emsOf(name),
+      `<div class="muted">Nog geen warmteverlies ingevuld</div>`)),
+  ];
+  const loose = p.emitters.filter((e) => !normRoom(e.room));
+  const total = (p.rooms || []).reduce((t, r) => t + (r.loss_w || 0), 0);
+  const flowOf = (ufh) => p.emitters.filter((e) => (e.type === "vloerverwarming") === ufh)
+    .reduce((t, e) => t + (result(e.id).design_flow || 0), 0);
+  const ufhFallback = set.ufh_supply_temp ?? set.design_supply_temp ?? set.supply_temp;
+  view.innerHTML = `
+    <div class="table-wrap">
+      <div class="round-actions">
+        <button class="btn primary" id="btn-hl-upload">Warmteverliesberekening uploaden</button>
+        <button class="btn" id="btn-add-room">+ Ruimte</button>
+        <input type="file" id="hl-file" hidden accept=".csv,.tsv,.txt,.xlsx,.pdf,text/csv,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+        <label class="inline">Ontwerp-aanvoer radiatoren °C
+          <input name="design_supply_temp" inputmode="decimal" value="${set.design_supply_temp ?? ""}" placeholder="${set.supply_temp != null ? `cv ${fmt(set.supply_temp, 0)}` : "bijv. 55"}"></label>
+        <label class="inline">vloerverwarming °C
+          <input name="ufh_design_supply_temp" inputmode="decimal" value="${set.ufh_design_supply_temp ?? ""}" placeholder="${ufhFallback != null ? fmt(ufhFallback, 0) : "bijv. 35"}"></label>
+      </div>
+      <p class="muted small" style="max-width:980px">Vul per ruimte de <b>ontwerptemperatuur</b> en het <b>warmteverlies</b> uit de
+        warmteverliesberekening in, of upload de berekening (CSV, Excel of PDF). Een element hoort bij een ruimte als de
+        ruimtenaam gelijk is. Met het vermogen van het element en de ontwerp-aanvoertemperatuur volgt de
+        <b>ontwerpretour</b>: de retourtemperatuur waarbij het element precies het warmteverlies van zijn ruimte dekt.
+        Een warme of krap bemeten ruimte krijgt zo een hogere retour (meer debiet) dan een koele of ruim bemeten ruimte.</p>
+      ${A.need_supply ? `<div class="notice warn">Vul de ontwerp-aanvoertemperatuur in (hierboven) om de ontwerpretour te berekenen.</div>` : ""}
+      ${total ? `<p class="small">Totaal warmteverlies <b>${fmt(total, 0)} W</b>${flowOf(false) ? ` · ontwerpdebiet radiatoren <b>${fmt(flowOf(false), 0)} l/h</b>` : ""}${flowOf(true) ? ` · vloerverwarming <b>${fmt(flowOf(true), 0)} l/h</b>` : ""}</p>` : ""}
+      <table class="round rooms"><thead><tr>
+        <th>Ruimte / element</th><th>Ontwerptemp. °C</th><th>Warmteverlies W</th><th>Vermogen W</th>
+        <th>Ontwerpretour °C</th><th>ΔT K</th><th>Debiet l/h</th><th>Opmerking</th><th></th></tr></thead>
+        <tbody id="rooms-body">${body.join("") || `<tr class="empty-row"><td colspan="9" class="muted">Nog geen ruimtes. Upload een
+          warmteverliesberekening of voeg een ruimte toe.</td></tr>`}</tbody></table>
+      ${loose.length ? `<h3>Elementen zonder ruimte</h3>
+        <table class="round rooms"><tbody>${loose.map((e) => `<tr data-em="${e.id}">
+          <td><a href="#" data-open="${e.id}">${esc(e.name)}</a> <span class="muted small">${esc(TYPES[e.type]?.label || "")}</span></td>
+          <td><input name="room" placeholder="Ruimte" list="room-names" style="width:220px"></td></tr>`).join("")}</tbody></table>
+        <datalist id="room-names">${roomNames().map((n) => `<option value="${esc(n)}">`).join("")}</datalist>` : ""}
+    </div>`;
+
+  const save = async () => {
+    const rooms = [];
+    for (const tr of $$("#rooms-body tr.room", view)) {
+      const name = $("[name=name]", tr).value.trim();
+      const temp = numOrNull($("[name=temp]", tr).value), loss_w = numOrNull($("[name=loss_w]", tr).value);
+      for (const n of ["temp", "loss_w"]) {
+        if ($(`[name=${n}]`, tr).value.trim() !== "" && numOrNull($(`[name=${n}]`, tr).value) === null) return toast("Ongeldig getal", true);
+      }
+      if (tr.hasAttribute("data-new") && temp === null && loss_w === null) continue;
+      if (!name) return toast("Geef de ruimte een naam", true);
+      rooms.push({ id: tr.dataset.room || undefined, name, temp, loss_w });
+    }
+    await mutate("PUT", "rooms", { rooms });
+  };
+  const bindRows = () => {
+    $$("#rooms-body tr.room input", view).forEach((inp) => (inp.onchange = () => save().catch(() => {})));
+    $$("[data-del-room]", view).forEach((b) => (b.onclick = () => {
+      const tr = b.closest("tr");
+      if (!confirm(`Ruimte '${$("[name=name]", tr).value}' uit de warmteverliesberekening verwijderen?`)) return;
+      tr.remove();
+      save().catch(() => {});
+    }));
+  };
+  bindRows();
+  $$("tr[data-em] input", view).forEach((inp) => (inp.onchange = async () => {
+    const v = inp.name === "room" ? inp.value.trim() : numOrNull(inp.value);
+    if (inp.name !== "room" && inp.value.trim() !== "" && v === null) return toast("Ongeldig getal", true);
+    await mutate("PUT", `emitters/${inp.closest("tr").dataset.em}`, { [inp.name]: v }).catch(() => {});
+  }));
+  $$("[data-open]", view).forEach((a) => (a.onclick = (ev) => {
+    ev.preventDefault();
+    const e = emitter(a.dataset.open);
+    S.mode = "plan"; S.fpId = e.floorplan_id || S.fpId; S.selectedId = e.id; S.pipeId = null;
+    renderProject();
+  }));
+  $$(".round-actions input[name]", view).forEach((inp) => (inp.onchange = async () => {
+    const v = numOrNull(inp.value);
+    if (inp.value.trim() !== "" && v === null) return toast("Ongeldig getal", true);
+    await mutate("PUT", "", { settings: { [inp.name]: v } }).catch(() => {});
+  }));
+  $("#btn-add-room").onclick = () => {
+    $(".empty-row", view)?.remove();
+    $("#rooms-body").insertAdjacentHTML("beforeend", roomRow({ name: "", temp: null, loss_w: null }, []));
+    bindRows();
+    $("#rooms-body tr.room:last-of-type [name=name]").focus();
+  };
+  $("#btn-hl-upload").onclick = () => $("#hl-file").click();
+  $("#hl-file").onchange = (ev) => { if (ev.target.files[0]) importHeatloss(ev.target.files[0]); };
+}
+
+// Tekst uit een PDF als regels met tabs tussen de kolommen (de server herkent daarin de ruimtes).
+async function pdfToText(file) {
+  const pdf = await openPdf(file);
+  const lines = [];
+  for (let i = 1; i <= Math.min(pdf.numPages, 80); i++) {
+    const page = await pdf.getPage(i);
+    const items = (await page.getTextContent()).items.filter((it) => it.str && it.str.trim())
+      .map((it) => ({ s: it.str, x: it.transform[4], y: it.transform[5], w: it.width, h: it.height || 10 }));
+    items.sort((a, b) => b.y - a.y || a.x - b.x);
+    let row = [];
+    const flush = () => {
+      if (!row.length) return;
+      row.sort((a, b) => a.x - b.x);
+      let line = row[0].s, end = row[0].x + row[0].w;
+      for (const it of row.slice(1)) {
+        const gap = it.x - end;
+        line += (gap > Math.max(6, it.h * 0.9) ? "\t" : gap > it.h * 0.15 ? " " : "") + it.s;
+        end = Math.max(end, it.x + it.w);
+      }
+      lines.push(line);
+      row = [];
+    };
+    for (const it of items) {
+      if (row.length && Math.abs(row[0].y - it.y) > Math.max(2, it.h * 0.4)) flush();
+      row.push(it);
+    }
+    flush();
+  }
+  return lines.join("\n");
+}
+
+async function importHeatloss(file) {
+  const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+  let res;
+  try {
+    const fd = new FormData();
+    if (isPdf) {
+      const text = await pdfToText(file);
+      if (!text.trim()) throw new Error("Deze PDF bevat geen tekst (gescande afbeelding?). Vul de ruimtes met de hand in of gebruik CSV/Excel.");
+      fd.append("file", new Blob([text], { type: "text/plain" }), "pdf.txt");
+      fd.append("kind", "pdf");
+    } else fd.append("file", file, file.name);
+    toast(`Inlezen: ${file.name}…`);
+    res = await api("POST", `projects/${S.project.id}/heatloss/parse`, fd);
+  } catch (e) { return toast(`${file.name}: ${e.message}`, true); }
+  if (!res.rooms.length) {
+    return toast("Geen ruimtes herkend. Gebruik een tabel met kolommen voor ruimte, temperatuur en warmteverlies (W), of vul de ruimtes met de hand in.", true);
+  }
+  const anyMatch = res.rooms.some((r) => r.match);
+  const names = [...new Set([...res.app_rooms, ...(S.project.rooms || []).map((r) => r.name)])].sort((a, b) => a.localeCompare(b, "nl"));
+  const body = await dialog("Warmteverliesberekening importeren", `
+    <p class="muted small">${res.rooms.length} ruimte(n) herkend in <b>${esc(file.name)}</b>. Controleer de waarden en kies per regel
+      bij welke ruimte in de app ze hoort. ${isPdf ? "Een PDF wordt op tekst doorzocht: haal het vinkje weg bij regels die geen ruimte zijn. " : ""}
+      Twee regels op dezelfde ruimte worden opgeteld (bijv. woonkamer + open keuken).</p>
+    <div style="overflow:auto;max-height:55vh"><table class="history imp"><thead><tr><th></th><th>In de berekening</th><th>°C</th><th>W</th><th>Ruimte in de app</th></tr></thead>
+      <tbody>${res.rooms.map((r, i) => `<tr data-i="${i}">
+        <td><input type="checkbox" name="use" ${r.match || !(isPdf && anyMatch) ? "checked" : ""}></td>
+        <td>${esc(r.name)}</td>
+        <td><input name="temp" inputmode="decimal" value="${r.temp ?? ""}"></td>
+        <td><input name="loss_w" inputmode="decimal" value="${r.loss_w ?? ""}"></td>
+        <td><select name="match"><option value="">nieuw: ${esc(r.name)}</option>
+          ${names.map((n) => `<option value="${esc(n)}" ${n === r.match ? "selected" : ""}>${esc(n)}</option>`).join("")}</select></td>
+      </tr>`).join("")}</tbody></table></div>
+    <p class="muted small">Bestaande ruimtes met dezelfde naam worden overschreven; de rest blijft staan.</p>`,
+    { ok: "Importeren", wide: true });
+  if (!body) return;
+  const rooms = new Map((S.project.rooms || []).map((r) => [normRoom(r.name), { ...r }]));
+  const fresh = new Set();
+  let n = 0;
+  for (const tr of $$("tr[data-i]", body)) {
+    if (!$("[name=use]", tr).checked) continue;
+    const src = res.rooms[Number(tr.dataset.i)];
+    const name = $("[name=match]", tr).value || src.name, key = normRoom(name);
+    const temp = numOrNull($("[name=temp]", tr).value), loss = numOrNull($("[name=loss_w]", tr).value);
+    const cur = rooms.get(key);
+    if (cur && fresh.has(key)) {
+      cur.loss_w = (cur.loss_w || 0) + (loss || 0);
+      cur.temp = cur.temp ?? temp;
+    } else rooms.set(key, { id: cur?.id, name: cur?.name || name, temp, loss_w: loss });
+    fresh.add(key);
+    n++;
+  }
+  if (!n) return toast("Niets geselecteerd", true);
+  await mutate("PUT", "rooms", { rooms: [...rooms.values()] });
+  toast(`${n} regel(s) geïmporteerd`);
 }
 
 // ---- plattegronden uploaden -------------------------------------------------
@@ -892,16 +1139,20 @@ function loadScript(src) {
   });
 }
 
-async function pdfToImages(file) {
+async function openPdf(file) {
   if (!window.pdfjsLib) {
     toast("PDF-ondersteuning laden…");
     await loadScript(PDFJS + "pdf.min.js");
     window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS + "pdf.worker.min.js";
   }
   // isEvalSupported: false sluit CVE-2024-4367 (code uitvoeren via een kwaadaardig PDF-font).
-  const pdf = await window.pdfjsLib.getDocument({
+  return window.pdfjsLib.getDocument({
     data: await file.arrayBuffer(), isEvalSupported: false, enableXfa: false,
   }).promise;
+}
+
+async function pdfToImages(file) {
+  const pdf = await openPdf(file);
   const out = [];
   for (let i = 1; i <= Math.min(pdf.numPages, 20); i++) {
     const page = await pdf.getPage(i);
@@ -980,11 +1231,13 @@ async function editSettings() {
       <label>Cv-temperatuur aanvoer (°C)<input name="supply_temp" inputmode="decimal" value="${s.supply_temp ?? ""}" placeholder="leeg = per element meten"></label>
       <label>Cv-temperatuur vloerverwarming (°C)<input name="ufh_supply_temp" inputmode="decimal" value="${s.ufh_supply_temp ?? ""}" placeholder="leeg = zelfde als cv"></label>
       <p class="muted small" id="supply-hint" style="grid-column:1/-1;margin:0"></p>
+      <label title="Aanvoertemperatuur waarop de warmteverliesberekening is gebaseerd (bij de ontwerp-buitentemperatuur)">Ontwerp-aanvoer radiatoren (°C)<input name="design_supply_temp" inputmode="decimal" value="${s.design_supply_temp ?? ""}" placeholder="leeg = cv-temperatuur"></label>
+      <label>Ontwerp-aanvoer vloerverwarming (°C)<input name="ufh_design_supply_temp" inputmode="decimal" value="${s.ufh_design_supply_temp ?? ""}" placeholder="leeg = cv-temp. vloerverwarming"></label>
       <label>Ruimtetemperatuur standaard (°C)<input name="room_temp" inputmode="decimal" value="${s.room_temp}"></label>
       <label>Tolerantie "goed" (± % debiet)<input name="tolerance_pct" inputmode="decimal" value="${s.tolerance_pct}"></label>
     </div>
     <label>Methode<select name="method">
-      <option value="auto" ${s.method === "auto" ? "selected" : ""}>Automatisch: op warmtevraag als die overal is ingevuld, anders gelijk ΔT</option>
+      <option value="auto" ${s.method === "auto" ? "selected" : ""}>Automatisch: warmteverliesberekening als die compleet is, anders warmtevraag per element, anders gelijk ΔT</option>
       <option value="dt" ${s.method === "dt" ? "selected" : ""}>Altijd gelijk ΔT</option>
     </select></label>
     <label class="check"><input type="checkbox" name="keep_total_flow" ${s.keep_total_flow ? "checked" : ""}>
@@ -1056,6 +1309,8 @@ async function editSettings() {
         heat_source: val("heat_source"), target_dt: numOrNull(val("target_dt")),
         ufh_target_dt: numOrNull(val("ufh_target_dt")),
         supply_temp: numOrNull(val("supply_temp")), ufh_supply_temp: numOrNull(val("ufh_supply_temp")),
+        design_supply_temp: numOrNull(val("design_supply_temp")),
+        ufh_design_supply_temp: numOrNull(val("ufh_design_supply_temp")),
         room_temp: numOrNull(val("room_temp")), tolerance_pct: numOrNull(val("tolerance_pct")),
         method: val("method"), keep_total_flow: $("[name=keep_total_flow]", body).checked,
         radiator_exponent: numOrNull(val("radiator_exponent")), ufh_exponent: numOrNull(val("ufh_exponent")),

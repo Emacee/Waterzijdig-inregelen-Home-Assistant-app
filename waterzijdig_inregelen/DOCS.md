@@ -31,6 +31,52 @@
    laatste meting is veranderd krijgen een gestippelde rand en *meten*: doe na een tijdje
    een nieuwe meetronde. Herhaal tot (bijna) alles groen is.
 
+## Warmteverliesberekening
+
+Met een warmteverliesberekening (bijv. ISSO 51/53) regel je niet op één gelijk ΔT in, maar
+op wat elke ruimte echt nodig heeft. Een badkamer van 24 °C met een krap bemeten radiator
+heeft een hogere retour (meer debiet) nodig dan een slaapkamer van 18 °C met een ruime
+radiator.
+
+1. Open het tabblad **Warmteverlies** en klik **Warmteverliesberekening uploaden**:
+   * **CSV of Excel (.xlsx)**: een tabel met een kolom voor de ruimte, de
+     ontwerptemperatuur (°C) en het warmteverlies (W of kW). Staan er meerdere
+     vermogenskolommen in (transmissie, ventilatie, totaal), dan wordt de totaalkolom
+     gekozen.
+   * **PDF**: de tekst wordt in de browser uitgelezen en per regel wordt een naam, een
+     temperatuur (10–28 °C) en het grootste vermogen gezocht. Controleer dit goed en haal
+     het vinkje weg bij regels die geen ruimte zijn. Een gescande PDF (afbeelding) werkt
+     niet: vul de ruimtes dan met de hand in.
+2. In het importvenster kies je per regel bij welke **ruimte in de app** hij hoort (de app
+   doet een voorstel op naam, ook als er een code voor staat zoals "0.1 Woonkamer"). Twee
+   regels op dezelfde ruimte worden opgeteld, bijv. woonkamer + open keuken. Je kunt ook
+   met **+ Ruimte** zelf ruimtes invullen.
+3. Een element hoort bij een ruimte als het veld **Ruimte** bij het element dezelfde naam
+   heeft (hoofdletters en leestekens tellen niet). Vul bij elk element het **vermogen**
+   in (typeplaatje bij 75/65/20).
+4. Vul de **ontwerp-aanvoertemperatuur** in: de aanvoer waarbij de berekening hoort
+   (bij de ontwerp-buitentemperatuur). Leeg = de cv-temperatuur.
+
+Per element toont de app dan:
+
+* **aandeel**: het warmteverlies van de ruimte, verdeeld over de elementen in die ruimte
+  naar wat ze bij de ontwerp-aanvoer kunnen afgeven;
+* **ontwerpretour**: de retour waarbij het element bij de ontwerp-aanvoer en de
+  ontwerptemperatuur van zijn ruimte precies dat aandeel afgeeft (EN 442-karakteristiek);
+* **ontwerpdebiet**: aandeel / (1,163 · (aanvoer − ontwerpretour)).
+
+Kan een element zijn aandeel niet leveren, dan meldt de app dat de afgifte te klein is
+(hogere aanvoer of groter element nodig) en luidt het advies "volledig open".
+
+**Inregelen**: met methode *Automatisch* wordt een groep op ontwerpdebiet ingeregeld zodra
+alle gemeten elementen een complete ontwerpberekening hebben. Het advies is dan
+ontwerpdebiet / gemeten debiet. Meet je bij een andere aanvoer- of kamertemperatuur dan in
+het ontwerp, dan rekent de app de **doelretour** om naar die omstandigheden: het debiet
+blijft het ontwerpdebiet, de retour waarop je moet uitkomen schuift mee. De verhouding
+tussen de elementen blijft zo gelijk; wat in totaal te veel of te weinig is, verschijnt als
+pompadvies. Een niet gemeten ruimtetemperatuur valt terug op de ontwerptemperatuur van de
+ruimte.
+
 ## Leidingverloop en hydraulisch schema
 
 * **Leiding tekenen**: kies op de plattegrond **✎ Leiding** en klik de punten van het
@@ -69,6 +115,7 @@ bepaald; de verhouding *doel / huidig* is de **debietfactor** (> 1 = verder open
   doel-ΔT halen. Het vermogen is hiervoor niet nodig; het wordt alleen gebruikt om
   elementen naar hun debiet te wegen (zonder vermogen telt een element als het
   gemiddelde).
+* **Op ontwerpdebiet**: zie *Warmteverliesberekening* hierboven. Heeft deze voorrang.
 * **Op warmtevraag**: als bij **alle** gemeten elementen van een groep zowel vermogen als
   warmtevraag is ingevuld, wordt het totaal geleverde vermogen verdeeld naar rato van de
   warmtevraag. Kan een element zijn deel bij deze aanvoertemperatuur niet leveren, dan
@@ -104,6 +151,8 @@ optioneel een label: `8=0.56:N`.
   over de ventielen; inregelen blijft daardoor een paar rondes meten en bijstellen.
 * De kv-tabellen zijn indicatief. Gebruik voor een nauwkeurig resultaat de waarden uit
   het datablad van je ventiel.
+* Het herkennen van een warmteverliesberekening is een hulpmiddel: rapporten hebben geen
+  vaste indeling. Controleer de geïmporteerde waarden altijd.
 * PDF-plattegronden worden in de browser omgezet met pdf.js (meegeleverd met de add-on,
   dus zonder internet). Maximaal 20 pagina's per PDF.
 
@@ -121,7 +170,7 @@ optioneel een label: `8=0.56:N`.
 | optie | standaard | betekenis |
 |---|---|---|
 | `log_level` | `info` | Hoeveel de add-on logt. |
-| `max_upload_mb` | `25` | Maximale grootte van een plattegrond. |
+| `max_upload_mb` | `25` | Maximale grootte van een plattegrond of warmteverliesberekening. |
 
 De cv-temperatuur, doel-ΔT's en ventieltypes zijn instellingen per project (⚙ in het
 project), geen add-on-opties.

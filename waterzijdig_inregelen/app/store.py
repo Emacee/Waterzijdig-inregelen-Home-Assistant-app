@@ -2,6 +2,9 @@
 
     /data/projects/<project_id>/project.json
     /data/projects/<project_id>/floorplans/<floorplan_id>.<ext>
+
+``rooms`` in project.json zijn de ruimtes uit de warmteverliesberekening (naam,
+ontwerptemperatuur, warmteverlies); elementen horen erbij via hun ruimtenaam.
 """
 from __future__ import annotations
 
@@ -84,6 +87,7 @@ class Store:
         p.setdefault("emitters", [])
         p.setdefault("components", [])
         p.setdefault("boiler", [])
+        p.setdefault("rooms", [])
         for fp in p["floorplans"]:
             fp.setdefault("pipes", [])
         return p
@@ -105,7 +109,7 @@ class Store:
             "notes": "", "created": now_iso(), "updated": now_iso(),
             "settings": {**copy.deepcopy(DEFAULT_SETTINGS), **(settings or {})},
             "valve_types": copy.deepcopy(DEFAULT_VALVE_TYPES),
-            "floorplans": [], "emitters": [], "components": [],
+            "floorplans": [], "emitters": [], "components": [], "rooms": [],
         }
         return self.save(p)
 

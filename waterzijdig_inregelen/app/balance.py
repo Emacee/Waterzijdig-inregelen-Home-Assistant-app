@@ -24,6 +24,16 @@ debiet; de verhouding ``r = doel / huidig`` is het advies (r > 1: verder open).
 * **Warmtevraag-methode**: als bij álle gemeten elementen het vermogen én de
   warmtevraag van de ruimte zijn ingevuld, wordt het huidige totaal geleverde
   vermogen verdeeld naar rato van de warmtevraag.
+* **Ontwerp-methode** (warmteverliesberekening): staan er ruimtes met een
+  ontwerptemperatuur en warmteverlies in het project (``rooms``) en is de
+  ontwerp-aanvoertemperatuur bekend, dan volgt per element het *ontwerpdebiet*:
+  het warmteverlies van de ruimte wordt over de elementen in die ruimte verdeeld
+  en de ontwerpretour is de retour waarbij het element dat deel afgeeft bij de
+  ontwerp-aanvoer en de ontwerptemperatuur van díe ruimte. Een warmere ruimte of
+  een krap bemeten element krijgt zo een hogere retour (meer debiet) dan een
+  ruim bemeten element in een koelere ruimte. Het advies is ontwerpdebiet /
+  huidig debiet; de doelretour bij een meting is de retour die bij het
+  ontwerpdebiet hoort onder de gemeten aanvoer- en ruimtetemperatuur.
 
 Omdat dichtdraaien van het ene ventiel het andere meer water geeft, worden de
 doeldebieten standaard herschaald zodat het totale (pomp)debiet gelijk blijft
@@ -36,6 +46,7 @@ met kv, dus ``kv_nieuw = kv_huidig * r``.
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 CP_WH_PER_L_K = 1.163  # warmtecapaciteit water [Wh/(l·K)]
@@ -54,6 +65,8 @@ DEFAULT_SETTINGS: Dict[str, Any] = {
     "room_temp": 20.0,
     "supply_temp": None,             # cv-aanvoer [°C]; None = aanvoer per element meten
     "ufh_supply_temp": None,         # idem vloerverwarming; None = gelijk aan supply_temp
+    "design_supply_temp": None,      # ontwerp-aanvoer (warmteverliesberekening); None = supply_temp
+    "ufh_design_supply_temp": None,  # idem vloerverwarming; None = ufh_supply_temp / ontwerp-aanvoer
     "tolerance_pct": 10.0,
     "keep_total_flow": True,
     "method": "auto",                # auto | dt
@@ -145,6 +158,22 @@ def solve_t_out(q_target: float, p_nom: float, n: float, nominal: Sequence[float
     return (lo + hi) / 2, False
 
 
+def flow_return(flow: float, p_nom: float, n: float, nominal: Sequence[float],
+                t_in: float, t_room: float) -> Optional[float]:
+    """Retourtemperatuur die bij een gegeven debiet [l/h] hoort (afgifte = watertransport)."""
+    lo, hi = t_room + 1e-3, t_in - 1e-3
+    if hi <= lo or flow <= 0:
+        return None
+    for _ in range(80):
+        mid = (lo + hi) / 2
+        q = heat_output(p_nom, n, nominal, t_in, mid, t_room) or 0.0
+        if q < CP_WH_PER_L_K * flow * (t_in - mid):
+            lo = mid
+        else:
+            hi = mid
+    return (lo + hi) / 2
+
+
 # ---- ventielen -------------------------------------------------------------
 
 def _steps(valve: Dict[str, Any]) -> List[Tuple[float, float, str]]:
@@ -232,6 +261,119 @@ def supply_temp_for(cfg: Dict[str, Any], is_ufh: bool) -> Optional[float]:
     return _num(cfg.get("supply_temp"))
 
 
+def design_supply_for(cfg: Dict[str, Any], is_ufh: bool) -> Optional[float]:
+    """Ontwerp-aanvoertemperatuur voor deze groep; valt terug op de cv-temperatuur."""
+    keys = (("ufh_design_supply_temp", "ufh_supply_temp", "design_supply_temp", "supply_temp")
+            if is_ufh else ("design_supply_temp", "supply_temp"))
+    for k in keys:
+        v = _num(cfg.get(k))
+        if v is not None:
+            return v
+    return None
+
+
+def norm_room(name: Any) -> str:
+    """Ruimtenaam zonder hoofdletters en leestekens, om elementen aan ruimtes te koppelen."""
+    return " ".join(re.sub(r"[^\w]+", " ", str(name or "").casefold()).split())
+
+
+def _c(v: float) -> str:
+    return f"{v:.1f}".rstrip("0").rstrip(".").replace(".", ",")
+
+
+def design(project: Dict[str, Any], cfg: Dict[str, Any]) -> Tuple[Dict[str, Dict[str, Any]],
+                                                                   Dict[str, Any]]:
+    """Ontwerpwaarden uit de warmteverliesberekening.
+
+    Geeft (per element-id, overzicht per ruimte). Een element krijgt ``design_q`` (zijn deel
+    van het warmteverlies), ``design_t_out`` en ``design_flow`` als de ruimte compleet is:
+    warmteverlies bekend, van alle elementen in de ruimte het vermogen bekend en een
+    ontwerp-aanvoertemperatuur ingesteld.
+    """
+    emitters = project.get("emitters") or []
+    members: Dict[str, List[Dict[str, Any]]] = {}
+    labels: Dict[str, str] = {}
+    for em in emitters:
+        key = norm_room(em.get("room"))
+        if key:
+            members.setdefault(key, []).append(em)
+            labels.setdefault(key, str(em.get("room")).strip())
+    per: Dict[str, Dict[str, Any]] = {}
+    rooms_out: List[Dict[str, Any]] = []
+    seen = set()
+    need_supply = False
+    for room in project.get("rooms") or []:
+        key = norm_room(room.get("name"))
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ems = members.get(key, [])
+        theta = _num(room.get("temp"))
+        loss = _num(room.get("loss_w"))
+        info: Dict[str, Any] = {"id": room.get("id"), "name": room.get("name"), "temp": theta,
+                                "loss_w": loss, "emitters": [e["id"] for e in ems],
+                                "warnings": [], "complete": False}
+        rooms_out.append(info)
+        if theta is None:
+            theta = float(cfg["room_temp"])
+        for em in ems:
+            per[em["id"]] = {"room_id": room.get("id"), "room_temp": theta}
+        if not ems:
+            info["warnings"].append("Geen element met deze ruimtenaam: vul bij het element "
+                                    "dezelfde ruimte in")
+            continue
+        if not loss:
+            info["warnings"].append("Warmteverlies ontbreekt")
+            continue
+        missing = [e.get("name") or "element" for e in ems if not _num(e.get("power_w"))]
+        if missing:
+            info["warnings"].append("Vermogen ontbreekt bij " + ", ".join(missing))
+            continue
+        parts = []
+        for em in ems:
+            is_ufh = em.get("type") == "vloerverwarming"
+            ts = design_supply_for(cfg, is_ufh)
+            if ts is None:
+                break
+            n = float(cfg["ufh_exponent"] if is_ufh else cfg["radiator_exponent"])
+            nominal = cfg["ufh_nominal"] if is_ufh else cfg["radiator_nominal"]
+            dt = max(float(cfg["ufh_target_dt"] if is_ufh else cfg["target_dt"]), 0.5)
+            # weging: wat het element bij de ontwerp-aanvoer en het doel-ΔT kan afgeven
+            w = heat_output(float(em["power_w"]), n, nominal, ts, max(ts - dt, theta + 1), theta)
+            parts.append((em, ts, n, nominal, w or 0.0))
+        if len(parts) < len(ems):
+            need_supply = True
+            info["warnings"].append("Ontwerp-aanvoertemperatuur ontbreekt")
+            continue
+        cap = sum(pt[4] for pt in parts)
+        if cap <= 0:
+            info["warnings"].append("Ontwerp-aanvoer is niet warmer dan de ruimte")
+            continue
+        info["capacity_w"] = round(cap)
+        info["complete"] = True
+        q_max_tot = 0.0
+        for em, ts, n, nominal, w in parts:
+            q = loss * w / cap
+            p_nom = float(em["power_w"])
+            t_o, sat = solve_t_out(q, p_nom, n, nominal, ts, theta)
+            d = per[em["id"]]
+            d.update(design_supply=ts, design_q=q, design_sat=sat)
+            q_max_tot += heat_output(p_nom, n, nominal, ts, ts - 1e-3, theta) or 0.0
+            if not sat:
+                d["design_t_out"] = t_o
+                d["design_flow"] = q / (CP_WH_PER_L_K * (ts - t_o))
+        if any(per[e["id"]]["design_sat"] for e in ems):
+            info["warnings"].append(
+                f"Afgifte te klein: bij {_c(parts[0][1])} °C aanvoer en {_c(theta)} °C ruimte "
+                f"maximaal ~{q_max_tot:.0f} W, nodig {loss:.0f} W. Hogere aanvoertemperatuur of "
+                "een groter element nodig; volledig open zetten.")
+    unmatched = sorted(labels[k] for k in members if k not in seen)
+    return per, {"rooms": rooms_out, "unmatched": unmatched, "need_supply": need_supply,
+                 "no_room": sum(1 for e in emitters if not norm_room(e.get("room"))),
+                 "design_supply": design_supply_for(cfg, False),
+                 "ufh_design_supply": design_supply_for(cfg, True)}
+
+
 def latest_measurement(emitter: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     ms = emitter.get("measurements") or []
     if not ms:
@@ -246,6 +388,7 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
 
     emitters = project.get("emitters") or []
     by_id = {e["id"]: e for e in emitters}
+    design_by, rooms = design(project, cfg)
     rows: List[Dict[str, Any]] = []
     for em in emitters:
         is_ufh = em.get("type") == "vloerverwarming"
@@ -258,6 +401,7 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
             "power_w": _num(em.get("power_w")), "demand_w": _num(em.get("demand_w")),
             "_group": "vloer" if is_ufh else "rad", "_scale": 1.0,
         }
+        row.update(design_by.get(em["id"], {}))
         rows.append(row)
         if not m:
             row["advice"] = "Nog geen meting"
@@ -268,7 +412,8 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
             t_in, t_in_source = supply_temp_for(cfg, is_ufh), "cv"
         t_room = _num(m.get("t_room"))
         if t_room is None:
-            t_room = float(cfg["room_temp"])
+            # niet gemeten: de ontwerptemperatuur van de ruimte, anders de projectstandaard
+            t_room = row.get("room_temp", float(cfg["room_temp"]))
         row.update(t_in=t_in, t_in_source=t_in_source, t_out=t_out, t_room=t_room,
                    measured_at=m.get("ts"), preset_measured=_num(m.get("preset")))
         if t_out is None:
@@ -309,7 +454,7 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
         members = [r for r in rows if r["_group"] == key]
         if not members:
             continue
-        g = _distribute(key, label, members, cfg, notes)
+        g = _distribute(key, label, members, cfg, notes, bool(rooms["rooms"]))
         groups.append(g)
 
     for r in rows:
@@ -334,8 +479,10 @@ def analyze(project: Dict[str, Any]) -> Dict[str, Any]:
         for k, v in list(r.items()):
             if isinstance(v, float):
                 r[k] = round(v, 3)
-    return {"method": "vraag" if methods == {"vraag"} else "dt", "summary": summary,
-            "emitters": rows}
+    for info in rooms["rooms"]:
+        info["temp_used"] = info["temp"] if info["temp"] is not None else float(cfg["room_temp"])
+    return {"method": methods.pop() if len(methods) == 1 else "dt", "summary": summary,
+            "emitters": rows, "rooms": rooms}
 
 
 def _boiler(project: Dict[str, Any], cfg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -358,7 +505,7 @@ def _boiler(project: Dict[str, Any], cfg: Dict[str, Any]) -> Optional[Dict[str, 
 
 
 def _distribute(key: str, label: str, members: List[Dict[str, Any]], cfg: Dict[str, Any],
-                notes: List[str]) -> Dict[str, Any]:
+                notes: List[str], has_rooms: bool = False) -> Dict[str, Any]:
     """Bepaal ratio_raw en de normalisatiefactor voor één groep (één watercircuit)."""
     measured = [r for r in members if r["status"] == "gemeten"]
     target_dt = max(float(cfg["ufh_target_dt"] if key == "vloer" else cfg["target_dt"]), 0.5)
@@ -369,9 +516,33 @@ def _distribute(key: str, label: str, members: List[Dict[str, Any]], cfg: Dict[s
                          "members": len(members), "measured": len(measured), "method": "dt"}
     if not measured:
         return g
-    use_demand = cfg["method"] == "auto" and all(r["power_w"] and r["demand_w"] for r in measured)
+    use_design = cfg["method"] == "auto" and all(r.get("design_q") for r in measured)
+    use_demand = (not use_design and cfg["method"] == "auto"
+                  and all(r["power_w"] and r["demand_w"] for r in measured))
+    goal = f"overal ΔT {target_dt:g} K te halen"
     scale = 1.0
-    if use_demand:
+    if has_rooms and cfg["method"] == "auto" and not use_design:
+        lacking = [r["name"] or "element" for r in measured if not r.get("design_q")]
+        notes.append(f"{label}: voor inregelen op de warmteverliesberekening ontbreekt bij "
+                     f"{', '.join(lacking[:6])}{' …' if len(lacking) > 6 else ''} een gekoppelde "
+                     "ruimte met warmteverlies, het vermogen of de ontwerp-aanvoertemperatuur "
+                     "(zie tabblad Warmteverlies).")
+    if use_design:
+        g["method"] = "ontwerp"
+        g["design_supply"] = design_supply_for(cfg, key == "vloer")
+        goal = "de ontwerpdebieten uit de warmteverliesberekening te halen"
+        for r in measured:
+            if r.get("design_sat"):
+                r["ratio_raw"] = RATIO_CAP
+                r["warnings"].append("Element is te klein voor het warmteverlies van de ruimte bij "
+                                     "de ontwerp-aanvoertemperatuur: volledig open zetten")
+                continue
+            r["ratio_raw"] = r["design_flow"] / r["flow_act"]
+            t_o = flow_return(r["design_flow"], r["power_w"], r["n"], r["nominal"],
+                              r["t_in"], r["t_room"])
+            if t_o is not None:
+                r["target_t_out"] = t_o
+    elif use_demand:
         g["method"] = "vraag"
         f = sum(r["q_act"] for r in measured) / sum(r["demand_w"] for r in measured)
         for r in measured:
@@ -401,25 +572,25 @@ def _distribute(key: str, label: str, members: List[Dict[str, Any]], cfg: Dict[s
             lm_t = lmtd(r["t_in"], t_o_target, r["t_room"])
             dt_t = r["t_in"] - t_o_target
             r["ratio_raw"] = (lm_t / r["_lm_m"]) ** r["n"] * r["_dt_eff"] / dt_t
-        # Met één element valt er niets te verdelen: dan geldt het ruwe advies.
-        if cfg["keep_total_flow"] and len(measured) >= 2:
-            known = [r["flow_act"] for r in measured if r.get("flow_act")]
-            # onbekend debiet: schat als het gemiddelde van de bekende (anders gelijk gewicht)
-            fill = sum(known) / len(known) if known else 1.0
-            w = [r.get("flow_act") or fill for r in measured]
-            scale = sum(w) / sum(wi * r["ratio_raw"] for wi, r in zip(w, measured))
-            if 0 < len(known) < len(measured):
-                notes.append(f"{label}: niet bij alle elementen is het vermogen bekend; voor die "
-                             "elementen is het gemiddelde debiet aangenomen.")
-            g["pump_factor"] = round(1 / scale, 2)
-            g["pump_advice"] = _pump_text(label, 1 / scale, target_dt)
+    # Met één element valt er niets te verdelen: dan geldt het ruwe advies.
+    if not use_demand and cfg["keep_total_flow"] and len(measured) >= 2:
+        known = [r["flow_act"] for r in measured if r.get("flow_act")]
+        # onbekend debiet: schat als het gemiddelde van de bekende (anders gelijk gewicht)
+        fill = sum(known) / len(known) if known else 1.0
+        w = [r.get("flow_act") or fill for r in measured]
+        scale = sum(w) / sum(wi * r["ratio_raw"] for wi, r in zip(w, measured))
+        if 0 < len(known) < len(measured):
+            notes.append(f"{label}: niet bij alle elementen is het vermogen bekend; voor die "
+                         "elementen is het gemiddelde debiet aangenomen.")
+        g["pump_factor"] = round(1 / scale, 2)
+        g["pump_advice"] = _pump_text(label, 1 / scale, goal)
     for r in members:
         r["_scale"] = scale
 
     flows = [r for r in measured if r.get("flow_act")]
     g["dt_mean"] = round(sum(r["dt"] for r in measured) / len(measured), 2)
     t_in_mean = sum(r["t_in"] for r in measured) / len(measured)
-    if key == "rad" and target_dt >= 18 and t_in_mean < DT20_MIN_SUPPLY:
+    if g["method"] == "dt" and key == "rad" and target_dt >= 18 and t_in_mean < DT20_MIN_SUPPLY:
         notes.append(f"{label}: de aanvoer is gemiddeld {t_in_mean:.0f} °C. Een ΔT van "
                      f"{target_dt:g} K lukt meestal pas vanaf ~{DT20_MIN_SUPPLY:.0f} °C aanvoer; "
                      "overweeg een doel-ΔT van 15 K (⚙).")
@@ -431,13 +602,12 @@ def _distribute(key: str, label: str, members: List[Dict[str, Any]], cfg: Dict[s
         if use_demand:
             need = sum(r["flow_act"] * min(r["ratio_raw"], RATIO_CAP) for r in flows) / tot
             g["pump_factor"] = round(need, 2)
-            g["pump_advice"] = _pump_text(label, need, None)
+            g["pump_advice"] = _pump_text(label, need, "de warmtevraag te verdelen")
     return g
 
 
-def _pump_text(label: str, need: float, target_dt: Optional[float]) -> Optional[str]:
+def _pump_text(label: str, need: float, goal: str) -> Optional[str]:
     """need = benodigd totaal debiet t.o.v. het huidige."""
-    goal = f"overal ΔT {target_dt:g} K te halen" if target_dt else "de warmtevraag te verdelen"
     if need > 1.15:
         return (f"{label}: om {goal} is ~{(need - 1) * 100:.0f}% meer totaal debiet nodig — "
                 "zet de pomp hoger (of accepteer een grotere ΔT).")

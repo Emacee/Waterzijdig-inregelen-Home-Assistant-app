@@ -186,3 +186,42 @@ def test_boiler_measurement_in_round(client):
     boiler = r.json()["analysis"]["summary"]["boiler"]
     assert boiler["dt"] == 21.0 and boiler["warning"]
     assert "Warmtebron" in client.get(f"/api/projects/{pid}/export.csv").text
+
+
+def test_heatloss_import_and_rooms(client):
+    pid = client.post("/api/projects", json={"name": "Huis"}).json()["project"]["id"]
+    eid = client.post(f"/api/projects/{pid}/emitters",
+                      json={"room": "Woonkamer", "power_w": 3000}).json()["created_id"]
+    client.post(f"/api/projects/{pid}/emitters", json={"room": "Slaapkamer 2", "power_w": 600})
+    csv = ("Ruimte;Temperatuur;Warmteverlies (W)\n0.1 Woonkamer (bg);22;1200\n"
+           "Slaapkamer 1;20;400\nSlaapkamer 2;20;450\n")
+    r = client.post(f"/api/projects/{pid}/heatloss/parse", files={"file": ("wv.csv", csv)})
+    assert r.status_code == 200
+    found = r.json()["rooms"]
+    assert [x["match"] for x in found] == ["Woonkamer", None, "Slaapkamer 2"]
+    assert r.json()["app_rooms"] == ["Slaapkamer 2", "Woonkamer"]
+    assert client.get(f"/api/projects/{pid}").json()["project"]["rooms"] == []  # niets opgeslagen
+    assert client.post(f"/api/projects/{pid}/heatloss/parse",
+                       files={"file": ("wv.pdf", b"%PDF-1.4")}).status_code == 415
+
+    body = {"rooms": [{"name": "Woonkamer", "temp": 22, "loss_w": 1200},
+                      {"name": "Slaapkamer 2", "temp": 20, "loss_w": 450}]}
+    r = client.put(f"/api/projects/{pid}/rooms", json=body)
+    assert r.status_code == 200
+    rooms = r.json()["project"]["rooms"]
+    assert [x["name"] for x in rooms] == ["Woonkamer", "Slaapkamer 2"]
+    assert r.json()["analysis"]["rooms"]["need_supply"]
+    r = client.put(f"/api/projects/{pid}", json={"settings": {"design_supply_temp": 55}})
+    a = {x["id"]: x for x in r.json()["analysis"]["emitters"]}[eid]
+    assert a["room_temp"] == 22 and a["design_q"] == 1200 and 22 < a["design_t_out"] < 55
+    assert "Ontwerpretour" in client.get(f"/api/projects/{pid}/export.csv").text
+
+    # id's blijven behouden, dubbele namen en ongeldige waarden worden geweigerd
+    body["rooms"][0]["id"] = rooms[0]["id"]
+    assert client.put(f"/api/projects/{pid}/rooms",
+                      json=body).json()["project"]["rooms"][0]["id"] == rooms[0]["id"]
+    dup = {"rooms": [{"name": "Hal"}, {"name": " hal "}]}
+    assert client.put(f"/api/projects/{pid}/rooms", json=dup).status_code == 422
+    bad = {"rooms": [{"name": "Hal", "temp": 80}]}
+    assert client.put(f"/api/projects/{pid}/rooms", json=bad).status_code == 422
+    assert client.put(f"/api/projects/{pid}/rooms", json={"rooms": []}).json()["project"]["rooms"] == []
